@@ -24,8 +24,10 @@ export type HoleInput = {
 export type CourseLandmarkInput = {
   id?: string;
   landmarkType: "putting_green" | "clubhouse" | "driving_range" | "other";
-  latitude: number;
-  longitude: number;
+  endpoint1Lat: number;
+  endpoint1Lng: number;
+  endpoint2Lat?: number;
+  endpoint2Lng?: number;
 };
 
 /* =====================================================
@@ -99,18 +101,24 @@ export async function getCourseLandmarks(
   const supabase = supabaseServer();
   const { data, error } = await supabase
     .from("course_landmarks")
-    .select("id, landmark_type, latitude, longitude")
+    .select("id, landmark_type, latitude, longitude, endpoint1_latitude, endpoint1_longitude, endpoint2_latitude, endpoint2_longitude")
     .eq("course_id", courseId)
     .order("id", { ascending: true });
 
   if (error) throw new Error(`getCourseLandmarks failed: ${error.message}`);
 
-  return (data ?? []).map((row: any) => ({
-    id: row.id,
-    landmarkType: row.landmark_type,
-    latitude: row.latitude,
-    longitude: row.longitude,
-  }));
+  return (data ?? []).map((row: any) => {
+    const isDrivingRange = row.landmark_type === "driving_range";
+    return {
+      id: row.id,
+      landmarkType: row.landmark_type,
+      endpoint1Lat: isDrivingRange ? row.endpoint1_latitude : row.latitude,
+      endpoint1Lng: isDrivingRange ? row.endpoint1_longitude : row.longitude,
+      ...(isDrivingRange && row.endpoint2_latitude != null
+        ? { endpoint2Lat: row.endpoint2_latitude, endpoint2Lng: row.endpoint2_longitude }
+        : {}),
+    };
+  });
 }
 
 export async function saveCourseHoles(params: {
@@ -152,8 +160,8 @@ export async function saveCourseHoles(params: {
     }
 
     if (
-      !Number.isFinite(landmark.latitude) ||
-      !Number.isFinite(landmark.longitude)
+      !Number.isFinite(landmark.endpoint1Lat) ||
+      !Number.isFinite(landmark.endpoint1Lng)
     ) {
       throw new Error("Landmark coordinates must be valid numbers.");
     }
@@ -209,12 +217,25 @@ export async function saveCourseHoles(params: {
   }
 
   if (landmarks.length > 0) {
-    const landmarkRows = landmarks.map((l) => ({
-      course_id: finalCourseId,
-      landmark_type: l.landmarkType,
-      latitude: l.latitude,
-      longitude: l.longitude,
-    }));
+    const landmarkRows = landmarks.map((l) => {
+      if (l.landmarkType === "driving_range") {
+        return {
+          course_id: finalCourseId,
+          landmark_type: l.landmarkType,
+          endpoint1_latitude: l.endpoint1Lat,
+          endpoint1_longitude: l.endpoint1Lng,
+          ...(l.endpoint2Lat != null && l.endpoint2Lng != null
+            ? { endpoint2_latitude: l.endpoint2Lat, endpoint2_longitude: l.endpoint2Lng }
+            : {}),
+        };
+      }
+      return {
+        course_id: finalCourseId,
+        landmark_type: l.landmarkType,
+        latitude: l.endpoint1Lat,
+        longitude: l.endpoint1Lng,
+      };
+    });
 
     const { error: insertLandmarksErr } = await supabase
       .from("course_landmarks")

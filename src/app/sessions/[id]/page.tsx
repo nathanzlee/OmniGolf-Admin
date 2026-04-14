@@ -2,6 +2,8 @@ import {
   getSession,
   getSessionGroups,
   getSessionGroupPlayers,
+  getCourseHoles,
+  getCourseLandmarks,
   listCoursesForSelect,
   listUsersForSelect,
 } from "../../actions";
@@ -22,6 +24,11 @@ export default async function SessionDetailPage({
     listUsersForSelect(),
   ]);
 
+  const [courseHoles, courseLandmarks] = await Promise.all([
+    getCourseHoles(session.course_id),
+    getCourseLandmarks(session.course_id),
+  ]);
+
   return (
     <SessionEditor
       session={session}
@@ -29,6 +36,8 @@ export default async function SessionDetailPage({
       initialGroupPlayers={groupPlayers}
       courses={courses}
       users={users}
+      courseHoles={courseHoles}
+      courseLandmarks={courseLandmarks}
     />
   );
 }

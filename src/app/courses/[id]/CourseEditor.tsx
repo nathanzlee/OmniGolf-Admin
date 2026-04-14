@@ -27,6 +27,8 @@ type LandmarkRow = {
   landmarkType: "putting_green" | "clubhouse" | "driving_range" | "other";
   latitude: string;
   longitude: string;
+  endLatitude: string;
+  endLongitude: string;
 };
 
 const numInput =
@@ -57,8 +59,10 @@ function fromInitialLandmarks(initial: CourseLandmarkInput[]): LandmarkRow[] {
   return initial.map((l) => ({
     id: l.id,
     landmarkType: l.landmarkType,
-    latitude: String(l.latitude),
-    longitude: String(l.longitude),
+    latitude: l.endpoint1Lat != null ? String(l.endpoint1Lat) : "",
+    longitude: l.endpoint1Lng != null ? String(l.endpoint1Lng) : "",
+    endLatitude: l.endpoint2Lat != null ? String(l.endpoint2Lat) : "",
+    endLongitude: l.endpoint2Lng != null ? String(l.endpoint2Lng) : "",
   }));
 }
 
@@ -215,13 +219,17 @@ export default function CourseEditor({
         Number(h.allottedTime) > 0
     );
 
-    const landmarksValid = landmarks.every(
-      (l) =>
-        l.latitude &&
-        l.longitude &&
-        Number.isFinite(Number(l.latitude)) &&
-        Number.isFinite(Number(l.longitude))
-    );
+    const landmarksValid = landmarks.every((l) => {
+      if (!l.latitude || !l.longitude) return false;
+      if (!Number.isFinite(Number(l.latitude)) || !Number.isFinite(Number(l.longitude))) return false;
+      if (l.landmarkType === "driving_range" && (l.endLatitude || l.endLongitude)) {
+        return (
+          Number.isFinite(Number(l.endLatitude)) &&
+          Number.isFinite(Number(l.endLongitude))
+        );
+      }
+      return true;
+    });
 
     return holesValid && landmarksValid;
   }, [courseName, holes, landmarks]);
@@ -245,13 +253,15 @@ export default function CourseEditor({
         landmarkType: "other",
         latitude: "",
         longitude: "",
+        endLatitude: "",
+        endLongitude: "",
       },
     ]);
   }
 
   function updateLandmark(
     index: number,
-    field: "landmarkType" | "latitude" | "longitude",
+    field: "landmarkType" | "latitude" | "longitude" | "endLatitude" | "endLongitude",
     value: string
   ) {
     setLandmarks((prev) =>
@@ -278,8 +288,11 @@ export default function CourseEditor({
     return landmarks.map((l) => ({
       id: l.id,
       landmarkType: l.landmarkType,
-      latitude: Number(l.latitude),
-      longitude: Number(l.longitude),
+      endpoint1Lat: Number(l.latitude),
+      endpoint1Lng: Number(l.longitude),
+      ...(l.landmarkType === "driving_range" && l.endLatitude && l.endLongitude
+        ? { endpoint2Lat: Number(l.endLatitude), endpoint2Lng: Number(l.endLongitude) }
+        : {}),
     }));
   }
 
@@ -580,7 +593,11 @@ export default function CourseEditor({
               landmarks.map((landmark, index) => (
                 <div
                   key={landmark.id ?? index}
-                  className="grid gap-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3 md:grid-cols-[200px_1fr_1fr_auto]"
+                  className={`grid gap-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3 ${
+                    landmark.landmarkType === "driving_range"
+                      ? "md:grid-cols-[200px_1fr_auto]"
+                      : "md:grid-cols-[200px_1fr_1fr_auto]"
+                  }`}
                 >
                   <select
                     value={landmark.landmarkType}
@@ -595,25 +612,77 @@ export default function CourseEditor({
                     <option value="other">other</option>
                   </select>
 
-                  <input
-                    inputMode="decimal"
-                    value={landmark.latitude}
-                    onChange={(e) =>
-                      updateLandmark(index, "latitude", e.target.value)
-                    }
-                    placeholder="Latitude"
-                    className={numInput}
-                  />
-
-                  <input
-                    inputMode="decimal"
-                    value={landmark.longitude}
-                    onChange={(e) =>
-                      updateLandmark(index, "longitude", e.target.value)
-                    }
-                    placeholder="Longitude"
-                    className={numInput}
-                  />
+                  {landmark.landmarkType === "driving_range" ? (
+                    <div className="grid gap-2">
+                      <div>
+                        <div className="mb-1 text-xs font-medium text-zinc-500">Endpoint 1</div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <input
+                            inputMode="decimal"
+                            value={landmark.latitude}
+                            onChange={(e) =>
+                              updateLandmark(index, "latitude", e.target.value)
+                            }
+                            placeholder="Latitude"
+                            className={numInput}
+                          />
+                          <input
+                            inputMode="decimal"
+                            value={landmark.longitude}
+                            onChange={(e) =>
+                              updateLandmark(index, "longitude", e.target.value)
+                            }
+                            placeholder="Longitude"
+                            className={numInput}
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <div className="mb-1 text-xs font-medium text-zinc-500">Endpoint 2</div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <input
+                            inputMode="decimal"
+                            value={landmark.endLatitude}
+                            onChange={(e) =>
+                              updateLandmark(index, "endLatitude", e.target.value)
+                            }
+                            placeholder="Latitude"
+                            className={numInput}
+                          />
+                          <input
+                            inputMode="decimal"
+                            value={landmark.endLongitude}
+                            onChange={(e) =>
+                              updateLandmark(index, "endLongitude", e.target.value)
+                            }
+                            placeholder="Longitude"
+                            className={numInput}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <input
+                        inputMode="decimal"
+                        value={landmark.latitude}
+                        onChange={(e) =>
+                          updateLandmark(index, "latitude", e.target.value)
+                        }
+                        placeholder="Latitude"
+                        className={numInput}
+                      />
+                      <input
+                        inputMode="decimal"
+                        value={landmark.longitude}
+                        onChange={(e) =>
+                          updateLandmark(index, "longitude", e.target.value)
+                        }
+                        placeholder="Longitude"
+                        className={numInput}
+                      />
+                    </>
+                  )}
 
                   <button
                     type="button"

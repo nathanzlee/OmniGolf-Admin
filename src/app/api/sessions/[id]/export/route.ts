@@ -50,7 +50,7 @@ export async function GET(
 
     const { data: landmarks, error: landmarksError } = await supabase
       .from("course_landmarks")
-      .select("id, landmark_type, latitude, longitude")
+      .select("id, landmark_type, latitude, longitude, endpoint1_latitude, endpoint1_longitude, endpoint2_latitude, endpoint2_longitude")
       .eq("course_id", session.course_id)
       .order("id", { ascending: true });
 
@@ -159,8 +159,18 @@ export async function GET(
       course_landmarks: (landmarks ?? []).map((l: any) => ({
         id: l.id,
         landmark_type: l.landmark_type,
-        latitude: l.latitude,
-        longitude: l.longitude,
+        ...(l.landmark_type === "driving_range"
+          ? {
+              endpoint1_latitude: l.endpoint1_latitude,
+              endpoint1_longitude: l.endpoint1_longitude,
+              ...(l.endpoint2_latitude != null
+                ? { endpoint2_latitude: l.endpoint2_latitude, endpoint2_longitude: l.endpoint2_longitude }
+                : {}),
+            }
+          : {
+              latitude: l.latitude,
+              longitude: l.longitude,
+            }),
       })),
       groups: groupsJson,
       players: playersJson,
