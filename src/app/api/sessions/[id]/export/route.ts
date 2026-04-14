@@ -32,9 +32,10 @@ export async function GET(
       );
     }
 
-    const courseName = Array.isArray(session.golf_courses)
-      ? session.golf_courses[0]?.name ?? null
-      : session.golf_courses?.name ?? null;
+    const golfCourses = session.golf_courses as any;
+    const courseName = Array.isArray(golfCourses)
+      ? golfCourses[0]?.name ?? null
+      : golfCourses?.name ?? null;
 
     const { data: holes, error: holesError } = await supabase
       .from("course_holes")
