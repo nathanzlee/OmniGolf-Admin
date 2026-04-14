@@ -57,18 +57,18 @@ type SessionExport = {
 
 type PlayerPin = {
   userId: string;
-  email?: string | null;
+  email: string | null;
   latitude: number;
   longitude: number;
   recordedAt: string;
-  groupId?: string | null;
-  groupLabel?: string | null;
+  groupId: string | null;
+  groupLabel: string | null;
   groupPlayerCount: number;
 };
 
 type GroupPin = {
   groupId: string;
-  label?: string | null;
+  label: string | null;
   latitude: number;
   longitude: number;
   playerCount: number;
