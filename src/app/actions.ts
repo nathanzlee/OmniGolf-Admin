@@ -222,6 +222,8 @@ export async function saveCourseHoles(params: {
         return {
           course_id: finalCourseId,
           landmark_type: l.landmarkType,
+          latitude: l.endpoint1Lat,
+          longitude: l.endpoint1Lng,
           endpoint1_latitude: l.endpoint1Lat,
           endpoint1_longitude: l.endpoint1Lng,
           ...(l.endpoint2Lat != null && l.endpoint2Lng != null
