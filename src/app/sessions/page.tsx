@@ -82,12 +82,12 @@ export default async function SessionsPage() {
                             Edit
                           </Link>
 
-                          <a
-                            href={`/api/sessions/${s.id}/export`}
+                          <Link
+                            href={`/sessions/${s.id}`}
                             className="text-sm font-medium text-zinc-900 underline decoration-zinc-300 hover:decoration-zinc-600"
                           >
                             Download JSON
-                          </a>
+                          </Link>
                         </div>
                       </td>
                     </tr>
