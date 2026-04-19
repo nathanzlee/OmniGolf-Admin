@@ -92,7 +92,7 @@ function getAllTimestamps(data: SessionExport | null): number[] {
   return Array.from(new Set(times)).sort((a, b) => a - b);
 }
 
-function getLatestLocationAtOrBefore(
+function getEarliestLocationAtOrAfter(
   player: Player,
   timeMs: number
 ): PlayerLocation | null {
@@ -100,8 +100,8 @@ function getLatestLocationAtOrBefore(
 
   for (const loc of player.locations) {
     const locMs = new Date(loc.recorded_at).getTime();
-    if (locMs <= timeMs) {
-      if (!best || locMs > new Date(best.recorded_at).getTime()) {
+    if (locMs >= timeMs) {
+      if (!best || locMs < new Date(best.recorded_at).getTime()) {
         best = loc;
       }
     }
@@ -290,7 +290,7 @@ export default function SessionVisualizer() {
 
     return data.players
       .map((player) => {
-        const loc = getLatestLocationAtOrBefore(player, currentTimeMs);
+        const loc = getEarliestLocationAtOrAfter(player, currentTimeMs);
         if (!loc) return null;
 
         const groupInfo = groupByPlayerId.get(player.user_id);
