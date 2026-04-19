@@ -317,8 +317,12 @@ export default function SessionEditor({
     );
   }
 
+  const uuidPattern =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
   function toPayload(): SessionGroupInput[] {
     return groups.map((g) => ({
+      id: uuidPattern.test(g.localId) ? g.localId : undefined,
       label: g.label.trim() || undefined,
       teeTime: g.teeTime ? new Date(g.teeTime).toISOString() : undefined,
       playerUserIds: g.playerUserIds,

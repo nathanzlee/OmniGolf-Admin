@@ -537,46 +537,82 @@ export async function updateSession(params: {
     throw new Error(`updateSession load groups failed: ${existingGroupsErr.message}`);
   }
 
-  const existingGroupIds = (existingGroups ?? []).map((g) => g.id);
+  const existingGroupIdSet = new Set((existingGroups ?? []).map((g: any) => g.id as string));
+  const incomingGroupIdSet = new Set(
+    groups.filter((g) => g.id && existingGroupIdSet.has(g.id)).map((g) => g.id!)
+  );
 
-  if (existingGroupIds.length > 0) {
-    const { error: deleteGroupPlayersErr } = await supabase
+  // Delete groups that were removed
+  const groupIdsToDelete = [...existingGroupIdSet].filter((id) => !incomingGroupIdSet.has(id));
+  if (groupIdsToDelete.length > 0) {
+    const { error: deletePlayersErr } = await supabase
       .from("group_players")
       .delete()
-      .in("group_id", existingGroupIds);
+      .in("group_id", groupIdsToDelete);
 
-    if (deleteGroupPlayersErr) {
-      throw new Error(`updateSession delete group players failed: ${deleteGroupPlayersErr.message}`);
+    if (deletePlayersErr) {
+      throw new Error(`updateSession delete group players failed: ${deletePlayersErr.message}`);
     }
 
     const { error: deleteGroupsErr } = await supabase
       .from("session_groups")
       .delete()
-      .eq("session_id", sessionId);
+      .in("id", groupIdsToDelete);
 
     if (deleteGroupsErr) {
       throw new Error(`updateSession delete groups failed: ${deleteGroupsErr.message}`);
     }
   }
 
+  // Upsert each group, preserving IDs for existing ones
   for (const group of groups) {
-    const { data: createdGroup, error: createGroupErr } = await supabase
-      .from("session_groups")
-      .insert({
-        session_id: sessionId,
-        label: group.label?.trim() || null,
-        tee_time: group.teeTime || null,
-      })
-      .select("id")
-      .single();
+    let groupId: string;
 
-    if (createGroupErr) {
-      throw new Error(`updateSession create group failed: ${createGroupErr.message}`);
+    if (group.id && existingGroupIdSet.has(group.id)) {
+      const { error: updateGroupErr } = await supabase
+        .from("session_groups")
+        .update({
+          label: group.label?.trim() || null,
+          tee_time: group.teeTime || null,
+        })
+        .eq("id", group.id);
+
+      if (updateGroupErr) {
+        throw new Error(`updateSession update group failed: ${updateGroupErr.message}`);
+      }
+
+      groupId = group.id;
+    } else {
+      const { data: createdGroup, error: createGroupErr } = await supabase
+        .from("session_groups")
+        .insert({
+          session_id: sessionId,
+          label: group.label?.trim() || null,
+          tee_time: group.teeTime || null,
+        })
+        .select("id")
+        .single();
+
+      if (createGroupErr) {
+        throw new Error(`updateSession create group failed: ${createGroupErr.message}`);
+      }
+
+      groupId = createdGroup.id;
+    }
+
+    // Replace players for this group
+    const { error: deletePlayersErr } = await supabase
+      .from("group_players")
+      .delete()
+      .eq("group_id", groupId);
+
+    if (deletePlayersErr) {
+      throw new Error(`updateSession delete group players failed: ${deletePlayersErr.message}`);
     }
 
     if (group.playerUserIds.length > 0) {
       const rows = group.playerUserIds.map((userId) => ({
-        group_id: createdGroup.id,
+        group_id: groupId,
         user_id: userId,
       }));
 
