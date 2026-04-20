@@ -51,6 +51,7 @@ type SessionEventType = "behind pace" | "group split" | "group join" | "leave co
 
 type SessionEventRow = {
   id: string;
+  groupId: string;
   eventType: SessionEventType;
   landmark: string;
   time: string;
@@ -325,7 +326,7 @@ export default function SessionEditor({
   function addSessionEvent() {
     setSessionEvents((prev) => [
       ...prev,
-      { id: makeLocalId(), eventType: "behind pace", landmark: "", time: "" },
+      { id: makeLocalId(), groupId: "", eventType: "behind pace", landmark: "", time: "" },
     ]);
   }
 
@@ -467,6 +468,8 @@ export default function SessionEditor({
       }));
 
       data.events = sessionEvents.map((e) => ({
+        group_id: e.groupId || null,
+        group_label: e.groupId ? (groupLabelMap.get(e.groupId) ?? null) : null,
         event_type: e.eventType,
         landmark: e.landmark || null,
         landmark_label: e.landmark ? (labelMap.get(e.landmark) ?? e.landmark) : null,
@@ -548,57 +551,6 @@ export default function SessionEditor({
           </div>
         </div>
 
-        {/* Session metadata */}
-        <div className="mb-6 rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
-          <div className="grid gap-4 md:grid-cols-2">
-            <div>
-              <label className="mb-2 block text-sm font-medium text-zinc-700">Session name</label>
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className={inputClass + " w-full"}
-              />
-            </div>
-            <div>
-              <label className="mb-2 block text-sm font-medium text-zinc-700">Course</label>
-              <select
-                value={courseId}
-                onChange={(e) => setCourseId(e.target.value)}
-                className={inputClass + " w-full"}
-              >
-                <option value="">Select a course</option>
-                {courses.map((course) => (
-                  <option key={course.id} value={course.id}>
-                    {course.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="mb-2 block text-sm font-medium text-zinc-700">Session date</label>
-              <input
-                type="date"
-                value={sessionDate}
-                onChange={(e) => setSessionDate(e.target.value)}
-                className={inputClass + " w-full"}
-              />
-            </div>
-            <div>
-              <label className="mb-2 block text-sm font-medium text-zinc-700">Status</label>
-              <select
-                value={status}
-                onChange={(e) => setStatus(e.target.value as SessionStatus)}
-                className={inputClass + " w-full"}
-              >
-                <option value="planned">planned</option>
-                <option value="active">active</option>
-                <option value="completed">completed</option>
-                <option value="cancelled">cancelled</option>
-              </select>
-            </div>
-          </div>
-        </div>
-
         {/* ── Section: Session Configurations ── */}
         <div className="mb-3">
           <SectionHeader
@@ -610,6 +562,57 @@ export default function SessionEditor({
 
         {sectionsOpen.sessionConfig && (
           <div className="mb-6 rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
+            {/* Session metadata */}
+            <div className="mb-6 grid gap-4 md:grid-cols-2">
+              <div>
+                <label className="mb-2 block text-sm font-medium text-zinc-700">Session name</label>
+                <input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className={inputClass + " w-full"}
+                />
+              </div>
+              <div>
+                <label className="mb-2 block text-sm font-medium text-zinc-700">Course</label>
+                <select
+                  value={courseId}
+                  onChange={(e) => setCourseId(e.target.value)}
+                  className={inputClass + " w-full"}
+                >
+                  <option value="">Select a course</option>
+                  {courses.map((course) => (
+                    <option key={course.id} value={course.id}>
+                      {course.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="mb-2 block text-sm font-medium text-zinc-700">Session date</label>
+                <input
+                  type="date"
+                  value={sessionDate}
+                  onChange={(e) => setSessionDate(e.target.value)}
+                  className={inputClass + " w-full"}
+                />
+              </div>
+              <div>
+                <label className="mb-2 block text-sm font-medium text-zinc-700">Status</label>
+                <select
+                  value={status}
+                  onChange={(e) => setStatus(e.target.value as SessionStatus)}
+                  className={inputClass + " w-full"}
+                >
+                  <option value="planned">planned</option>
+                  <option value="active">active</option>
+                  <option value="completed">completed</option>
+                  <option value="cancelled">cancelled</option>
+                </select>
+              </div>
+            </div>
+
+            <hr className="mb-6 border-zinc-200" />
+
             {/* Groupings subsection */}
             <div className="mb-4 flex items-center justify-between">
               <div>
@@ -872,9 +875,10 @@ export default function SessionEditor({
               <div className="text-sm text-zinc-500">No events yet.</div>
             ) : (
               <div className="overflow-x-auto rounded-xl border border-zinc-200">
-                <table className="w-full min-w-[480px] border-collapse">
+                <table className="w-full min-w-[600px] border-collapse">
                   <thead>
                     <tr className="bg-zinc-50">
+                      <th className={thClass}>Group</th>
                       <th className={thClass}>Event Type</th>
                       <th className={thClass}>Landmark</th>
                       <th className={thClass}>Time</th>
@@ -884,6 +888,20 @@ export default function SessionEditor({
                   <tbody>
                     {sessionEvents.map((event) => (
                       <tr key={event.id} className="border-b border-zinc-100 last:border-0">
+                        <td className="px-3 py-2">
+                          <select
+                            value={event.groupId}
+                            onChange={(e) => updateSessionEvent(event.id, "groupId", e.target.value)}
+                            className={inputClass + " w-full"}
+                          >
+                            <option value="">—</option>
+                            {groups.map((g, i) => (
+                              <option key={g.localId} value={g.localId}>
+                                {g.label.trim() || `Group ${i + 1}`}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
                         <td className="px-3 py-2">
                           <select
                             value={event.eventType}
