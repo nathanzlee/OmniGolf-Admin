@@ -1,7 +1,21 @@
 import AdminNav from "@/components/AdminNav";
 import ScriptTester from "./ScriptTester";
+import { listSessions } from "../actions";
 
-export default function ScriptTestingPage() {
+export default async function ScriptTestingPage() {
+  const allSessions = await listSessions();
+  const completedSessions = allSessions
+    .filter((s) => s.status === "completed")
+    .map((s) => ({
+      id: s.id,
+      name: s.name,
+      sessionDate: s.session_date ?? null,
+      courseName:
+        s.golf_courses && !Array.isArray(s.golf_courses)
+          ? (s.golf_courses as { name: string }).name
+          : null,
+    }));
+
   return (
     <main className="min-h-screen bg-zinc-50">
       <div className="mx-auto max-w-6xl px-6 py-8">
@@ -12,7 +26,7 @@ export default function ScriptTestingPage() {
             Upload your group pacing Python script and a session JSON file to view the output.
           </p>
         </div>
-        <ScriptTester />
+        <ScriptTester completedSessions={completedSessions} />
       </div>
     </main>
   );

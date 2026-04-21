@@ -3,6 +3,13 @@
 import { useEffect, useRef, useState } from "react";
 
 type CsvResult = { name: string; content: string };
+
+type SessionOption = {
+  id: string;
+  name: string;
+  sessionDate: string | null;
+  courseName: string | null;
+};
 type RunResult = {
   csvFiles: CsvResult[];
   stdout: string;
@@ -26,7 +33,7 @@ function parseCSV(text: string): { headers: string[]; rows: string[][] } {
 const inputClass =
   "rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 outline-none focus:border-zinc-400";
 
-export default function ScriptTester() {
+export default function ScriptTester({ completedSessions }: { completedSessions: SessionOption[] }) {
   // Script state (persisted in localStorage)
   const [scriptName, setScriptName] = useState<string | null>(null);
   const [scriptB64, setScriptB64] = useState<string | null>(null);
@@ -35,6 +42,8 @@ export default function ScriptTester() {
   // JSON input state
   const [jsonText, setJsonText] = useState("");
   const jsonInputRef = useRef<HTMLInputElement>(null);
+
+  const [isLoadingSession, setIsLoadingSession] = useState(false);
 
   // Run state
   const [isRunning, setIsRunning] = useState(false);
@@ -71,6 +80,21 @@ export default function ScriptTester() {
     const reader = new FileReader();
     reader.onload = () => setJsonText(reader.result as string);
     reader.readAsText(file);
+  }
+
+  async function loadSession(sessionId: string) {
+    if (!sessionId) return;
+    setIsLoadingSession(true);
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/export`);
+      if (!res.ok) throw new Error(`Export failed: ${res.status}`);
+      const data = await res.json();
+      setJsonText(JSON.stringify(data, null, 2));
+    } catch (err: any) {
+      window.alert(`Failed to load session: ${err?.message ?? "unknown error"}`);
+    } finally {
+      setIsLoadingSession(false);
+    }
   }
 
   function clearScript() {
@@ -160,25 +184,44 @@ export default function ScriptTester() {
 
         {/* JSON upload */}
         <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <div>
-              <h2 className="text-sm font-semibold text-zinc-900">Session JSON</h2>
-              <p className="mt-1 text-xs text-zinc-500">
-                Upload or paste the JSON downloaded from a session.
-              </p>
-            </div>
+          <div className="mb-3">
+            <h2 className="text-sm font-semibold text-zinc-900">Session JSON</h2>
+            <p className="mt-1 text-xs text-zinc-500">
+              Choose a completed session, upload a file, or paste JSON directly.
+            </p>
+          </div>
+
+          {/* Session picker */}
+          <div className="mb-3 flex gap-2">
+            <select
+              defaultValue=""
+              onChange={(e) => loadSession(e.target.value)}
+              disabled={isLoadingSession}
+              className={inputClass + " flex-1"}
+            >
+              <option value="">Select a completed session…</option>
+              {completedSessions.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                  {s.courseName ? ` — ${s.courseName}` : ""}
+                  {s.sessionDate ? ` (${s.sessionDate})` : ""}
+                </option>
+              ))}
+            </select>
             <button
               type="button"
               onClick={() => jsonInputRef.current?.click()}
-              className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-medium text-zinc-700 shadow-sm hover:bg-zinc-50 whitespace-nowrap"
+              disabled={isLoadingSession}
+              className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-medium text-zinc-700 shadow-sm hover:bg-zinc-50 disabled:opacity-50 whitespace-nowrap"
             >
               Upload file
             </button>
           </div>
+
           <textarea
             value={jsonText}
             onChange={(e) => setJsonText(e.target.value)}
-            placeholder='Paste session JSON here, or upload a file above...'
+            placeholder={isLoadingSession ? "Loading…" : "Paste session JSON here, or use the options above…"}
             rows={6}
             className={inputClass + " w-full font-mono text-xs resize-y"}
           />
