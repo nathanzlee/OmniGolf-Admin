@@ -157,22 +157,31 @@ export async function GET(
         green_lng: h.green_lng,
         allotted_time: h.allotted_time,
       })),
-      course_landmarks: (landmarks ?? []).map((l: any) => ({
-        id: l.id,
-        landmark_type: l.landmark_type,
-        ...(l.landmark_type === "driving_range"
-          ? {
-              endpoint1_latitude: l.endpoint1_latitude,
-              endpoint1_longitude: l.endpoint1_longitude,
-              ...(l.endpoint2_latitude != null
-                ? { endpoint2_latitude: l.endpoint2_latitude, endpoint2_longitude: l.endpoint2_longitude }
-                : {}),
-            }
-          : {
-              latitude: l.latitude,
-              longitude: l.longitude,
-            }),
-      })),
+      course_landmarks: (landmarks ?? []).map((l: any) => {
+        if (l.landmark_type === "driving_range") {
+          const lat1 = l.endpoint1_latitude as number | null;
+          const lng1 = l.endpoint1_longitude as number | null;
+          const lat2 = l.endpoint2_latitude as number | null;
+          const lng2 = l.endpoint2_longitude as number | null;
+          const midLat = lat1 != null && lat2 != null ? (lat1 + lat2) / 2 : lat1;
+          const midLng = lng1 != null && lng2 != null ? (lng1 + lng2) / 2 : lng1;
+          return {
+            id: l.id,
+            landmark_type: l.landmark_type,
+            latitude: midLat,
+            longitude: midLng,
+            endpoint1_latitude: lat1,
+            endpoint1_longitude: lng1,
+            ...(lat2 != null ? { endpoint2_latitude: lat2, endpoint2_longitude: lng2 } : {}),
+          };
+        }
+        return {
+          id: l.id,
+          landmark_type: l.landmark_type,
+          latitude: l.latitude,
+          longitude: l.longitude,
+        };
+      }),
       groups: groupsJson,
       players: playersJson,
     };
