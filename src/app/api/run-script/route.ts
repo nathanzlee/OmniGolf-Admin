@@ -7,55 +7,86 @@ import { promisify } from "util";
 
 const execAsync = promisify(exec);
 
+type ScriptResult = {
+  csvFiles: { name: string; content: string }[];
+  stdout: string;
+  stderr: string;
+  error?: string;
+};
+
+async function runScript(
+  scriptBytes: ArrayBuffer,
+  scriptName: string,
+  jsonStr: string,
+  subdir: string
+): Promise<ScriptResult> {
+  await mkdir(subdir, { recursive: true });
+  const scriptPath = join(subdir, scriptName);
+  const jsonPath = join(subdir, "input.json");
+  await writeFile(scriptPath, Buffer.from(scriptBytes));
+  await writeFile(jsonPath, jsonStr, "utf-8");
+
+  try {
+    const { stdout, stderr } = await execAsync(
+      `python3 "${scriptPath}" "${jsonPath}"`,
+      { cwd: subdir, timeout: 60_000 }
+    );
+    const files = await readdir(subdir);
+    const csvFiles = files.filter((f) => f.endsWith(".csv")).sort();
+    const csvResults = await Promise.all(
+      csvFiles.map(async (f) => ({
+        name: f,
+        content: await readFile(join(subdir, f), "utf-8"),
+      }))
+    );
+    return { csvFiles: csvResults, stdout, stderr };
+  } catch (err: any) {
+    return {
+      csvFiles: [],
+      stdout: err?.stdout ?? "",
+      stderr: err?.stderr ?? "",
+      error: err?.message ?? "Script execution failed",
+    };
+  }
+}
+
 export async function POST(req: NextRequest) {
   const formData = await req.formData();
-  const scriptFile = formData.get("script") as File | null;
+  const pacingScript = formData.get("script_pacing") as File | null;
+  const assignmentScript = formData.get("script_assignment") as File | null;
   const jsonStr = formData.get("json") as string | null;
 
-  if (!scriptFile || !jsonStr) {
+  if (!jsonStr || (!pacingScript && !assignmentScript)) {
     return NextResponse.json(
-      { error: "Missing script or json" },
+      { error: "Provide json and at least one script" },
       { status: 400 }
     );
   }
 
-  const dir = join(tmpdir(), `omnigolf-script-${Date.now()}`);
-  await mkdir(dir, { recursive: true });
-
-  const scriptPath = join(dir, "script.py");
-  const jsonPath = join(dir, "input.json");
+  const base = join(tmpdir(), `omnigolf-script-${Date.now()}`);
 
   try {
-    await writeFile(scriptPath, Buffer.from(await scriptFile.arrayBuffer()));
-    await writeFile(jsonPath, jsonStr, "utf-8");
+    const [pacingResult, assignmentResult] = await Promise.all([
+      pacingScript
+        ? runScript(
+            await pacingScript.arrayBuffer(),
+            pacingScript.name,
+            jsonStr,
+            join(base, "pacing")
+          )
+        : Promise.resolve(null),
+      assignmentScript
+        ? runScript(
+            await assignmentScript.arrayBuffer(),
+            assignmentScript.name,
+            jsonStr,
+            join(base, "assignment")
+          )
+        : Promise.resolve(null),
+    ]);
 
-    const { stdout, stderr } = await execAsync(
-      `python3 "${scriptPath}" "${jsonPath}"`,
-      { cwd: dir, timeout: 60_000 }
-    );
-
-    const files = await readdir(dir);
-    const csvFiles = files.filter((f) => f.endsWith(".csv")).sort();
-
-    const csvResults = await Promise.all(
-      csvFiles.map(async (f) => ({
-        name: f,
-        content: await readFile(join(dir, f), "utf-8"),
-      }))
-    );
-
-    return NextResponse.json({ csvFiles: csvResults, stdout, stderr });
-  } catch (err: any) {
-    return NextResponse.json(
-      {
-        csvFiles: [],
-        error: err?.message ?? "Script execution failed",
-        stderr: err?.stderr ?? "",
-        stdout: err?.stdout ?? "",
-      },
-      { status: 500 }
-    );
+    return NextResponse.json({ pacing: pacingResult, assignment: assignmentResult });
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    await rm(base, { recursive: true, force: true });
   }
 }
