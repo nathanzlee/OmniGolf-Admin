@@ -187,17 +187,16 @@ export default function ScriptTester({ completedSessions }: { completedSessions:
           <div className="mb-3">
             <h2 className="text-sm font-semibold text-zinc-900">Session JSON</h2>
             <p className="mt-1 text-xs text-zinc-500">
-              Choose a completed session, upload a file, or paste JSON directly.
+              Choose a completed session or upload a JSON file.
             </p>
           </div>
 
-          {/* Session picker */}
-          <div className="mb-3 flex gap-2">
+          <div className="space-y-2">
             <select
               defaultValue=""
               onChange={(e) => loadSession(e.target.value)}
               disabled={isLoadingSession}
-              className={inputClass + " flex-1"}
+              className={inputClass + " w-full"}
             >
               <option value="">Select a completed session…</option>
               {completedSessions.map((s) => (
@@ -208,23 +207,23 @@ export default function ScriptTester({ completedSessions }: { completedSessions:
                 </option>
               ))}
             </select>
+
             <button
               type="button"
               onClick={() => jsonInputRef.current?.click()}
               disabled={isLoadingSession}
-              className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-medium text-zinc-700 shadow-sm hover:bg-zinc-50 disabled:opacity-50 whitespace-nowrap"
+              className="w-full rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-4 py-3 text-center text-sm text-zinc-500 hover:bg-zinc-100 disabled:opacity-50"
             >
-              Upload file
+              {jsonText ? "Replace with uploaded file" : "Or upload a .json file"}
             </button>
           </div>
 
-          <textarea
-            value={jsonText}
-            onChange={(e) => setJsonText(e.target.value)}
-            placeholder={isLoadingSession ? "Loading…" : "Paste session JSON here, or use the options above…"}
-            rows={6}
-            className={inputClass + " w-full font-mono text-xs resize-y"}
-          />
+          {jsonText && (
+            <p className="mt-2 text-xs text-zinc-500">
+              {isLoadingSession ? "Loading…" : "✓ JSON loaded"}
+            </p>
+          )}
+
           <input
             ref={jsonInputRef}
             type="file"
