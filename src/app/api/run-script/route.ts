@@ -48,6 +48,7 @@ export async function POST(req: NextRequest) {
   } catch (err: any) {
     return NextResponse.json(
       {
+        csvFiles: [],
         error: err?.message ?? "Script execution failed",
         stderr: err?.stderr ?? "",
         stdout: err?.stdout ?? "",

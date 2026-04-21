@@ -259,7 +259,7 @@ export default function ScriptTester({ completedSessions }: { completedSessions:
             </div>
           )}
 
-          {!result.error && result.csvFiles.length === 0 && (
+          {!result.error && (result.csvFiles ?? []).length === 0 && (
             <div className="rounded-xl border border-zinc-200 bg-white p-4 text-sm text-zinc-500">
               Script ran successfully but produced no CSV files.
               {result.stdout && (
@@ -268,7 +268,7 @@ export default function ScriptTester({ completedSessions }: { completedSessions:
             </div>
           )}
 
-          {result.csvFiles.length > 0 && (
+          {(result.csvFiles ?? []).length > 0 && (
             <div className="rounded-xl border border-zinc-200 bg-white shadow-sm">
               {/* Tabs */}
               <div className="flex flex-wrap gap-1 border-b border-zinc-200 px-4 pt-3">
