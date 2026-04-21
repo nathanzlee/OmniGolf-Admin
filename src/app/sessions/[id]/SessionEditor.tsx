@@ -32,11 +32,7 @@ type GroupRow = {
 type PacingEventType =
   | "start hole"
   | "finish hole"
-  | "behind pace"
-  | "group join"
-  | "group split"
-  | "off course"
-  | "leave course";
+  | "off course";
 
 type PacingRow = {
   id: string;
@@ -60,11 +56,7 @@ type SessionEventRow = {
 const PACING_EVENT_TYPES: PacingEventType[] = [
   "start hole",
   "finish hole",
-  "behind pace",
-  "group join",
-  "group split",
   "off course",
-  "leave course",
 ];
 
 const SESSION_EVENT_TYPES: SessionEventType[] = [
@@ -275,19 +267,10 @@ export default function SessionEditor({
   );
 
   function getLandmarkOptionsForPacingEvent(eventType: PacingEventType): LandmarkOption[] {
-    if (
-      eventType === "start hole" ||
-      eventType === "finish hole" ||
-      eventType === "behind pace" ||
-      eventType === "group join" ||
-      eventType === "group split"
-    ) {
+    if (eventType === "start hole" || eventType === "finish hole") {
       return holeOptions;
     }
-    if (eventType === "off course") {
-      return offCourseOptions;
-    }
-    return allLandmarkOptions;
+    return offCourseOptions;
   }
 
   // Group Pacing row functions
