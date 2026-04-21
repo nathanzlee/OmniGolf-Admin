@@ -28,6 +28,7 @@ const LS_KEYS = {
   pacingB64:      "omnigolf-script-pacing-b64",
   assignmentName: "omnigolf-script-assignment-name",
   assignmentB64:  "omnigolf-script-assignment-b64",
+  json:           "omnigolf-script-json",
 };
 
 function parseCSV(text: string): { headers: string[]; rows: string[][] } {
@@ -213,7 +214,19 @@ export default function ScriptTester({ completedSessions }: { completedSessions:
     const an = localStorage.getItem(LS_KEYS.assignmentName);
     const ab = localStorage.getItem(LS_KEYS.assignmentB64);
     if (an && ab) setAssignment({ name: an, b64: ab });
+
+    const savedJson = localStorage.getItem(LS_KEYS.json);
+    if (savedJson) setJsonText(savedJson);
   }, []);
+
+  useEffect(() => {
+    if (!jsonText) return;
+    try {
+      localStorage.setItem(LS_KEYS.json, jsonText);
+    } catch {
+      // Storage quota exceeded — silently ignore
+    }
+  }, [jsonText]);
 
   function makeUploadHandler(
     setter: (s: ScriptSlot) => void,
