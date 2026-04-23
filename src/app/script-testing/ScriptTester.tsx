@@ -164,10 +164,10 @@ function PacingMetrics({ matches }: { matches: PacingMatchRow[] }) {
           {totalMatched}/{totalChecks} timestamps matched (±{MATCH_THRESHOLD_MIN} min)
         </span>
       </div>
-      <div className="overflow-x-auto">
+      <div className="max-h-56 overflow-auto">
         <table className="w-full border-collapse">
           <thead>
-            <tr className="bg-zinc-50 text-xs font-semibold uppercase tracking-wide text-zinc-600">
+            <tr className="sticky top-0 bg-zinc-50 text-xs font-semibold uppercase tracking-wide text-zinc-600">
               <th className="border-b border-zinc-200 px-3 py-2 text-left">Group</th>
               <th className="border-b border-zinc-200 px-3 py-2 text-left">Hole</th>
               <th className="border-b border-zinc-200 px-3 py-2 text-left">Actual Start</th>
@@ -262,7 +262,7 @@ function PacingScriptResultPanel({
         </div>
 
         {/* Annotated CSV table */}
-        <div className="overflow-x-auto p-4">
+        <div className="max-h-[55vh] overflow-auto p-4">
           {headers.length === 0 ? (
             <p className="text-sm text-zinc-500">CSV is empty.</p>
           ) : (
@@ -412,6 +412,7 @@ export default function ScriptTester({ completedSessions }: { completedSessions:
   const [isRunning,    setIsRunning]    = useState(false);
   const [results,      setResults]      = useState<RunResults | null>(null);
   const [activeResult, setActiveResult] = useState<"pacing" | "assignment">("pacing");
+  const [showModal,    setShowModal]    = useState(false);
 
   // ── Load persisted state ──────────────────────────────────────────────────
   useEffect(() => {
@@ -591,12 +592,14 @@ export default function ScriptTester({ completedSessions }: { completedSessions:
       const data = await res.json() as RunResults;
       setResults(data);
       setActiveResult(data.pacing ? "pacing" : "assignment");
+      setShowModal(true);
     } catch (err: any) {
       const errResult = { csvFiles: [], stdout: "", stderr: "", error: err?.message ?? "Request failed" };
       setResults({
         pacing:     pacing.b64     ? errResult : null,
         assignment: assignment.b64 ? errResult : null,
       });
+      setShowModal(true);
     } finally {
       setIsRunning(false);
     }
@@ -672,34 +675,58 @@ export default function ScriptTester({ completedSessions }: { completedSessions:
         </button>
       </div>
 
-      {/* Results */}
+      {/* View Results button */}
       {results && (
-        <div className="space-y-3">
-          {results.pacing && results.assignment && (
-            <div className="flex gap-2">
-              {(["pacing", "assignment"] as const).map((key) => (
-                <button key={key} type="button" onClick={() => setActiveResult(key)}
-                  className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
-                    activeResult === key
-                      ? "bg-zinc-900 text-white shadow-sm"
-                      : "border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50"
-                  }`}>
-                  {key === "pacing" ? "Group Pacing" : "Group Assignments"}
-                </button>
-              ))}
-            </div>
-          )}
+        <button type="button" onClick={() => setShowModal(true)}
+          className="rounded-lg border border-zinc-200 bg-white px-4 py-2 text-sm font-medium text-zinc-800 shadow-sm hover:bg-zinc-50">
+          View Results
+        </button>
+      )}
 
-          {activeResult === "pacing" && results.pacing && (
-            <PacingScriptResultPanel
-              result={results.pacing}
-              pacingMatches={pacingMatches}
-              csvAnnotations={csvAnnotations}
-            />
-          )}
-          {activeResult === "assignment" && (
-            <ScriptResultPanel result={results.assignment} />
-          )}
+      {/* Results modal */}
+      {showModal && results && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={(e) => { if (e.target === e.currentTarget) setShowModal(false); }}>
+          <div className="flex h-[90vh] w-full max-w-6xl flex-col rounded-2xl border border-zinc-200 bg-zinc-50 shadow-xl">
+            {/* Modal header */}
+            <div className="flex shrink-0 items-center justify-between border-b border-zinc-200 px-6 py-4">
+              <div className="flex items-center gap-3">
+                <h2 className="text-sm font-semibold text-zinc-900">Results</h2>
+                {results.pacing && results.assignment && (
+                  <div className="flex gap-2">
+                    {(["pacing", "assignment"] as const).map((key) => (
+                      <button key={key} type="button" onClick={() => setActiveResult(key)}
+                        className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                          activeResult === key
+                            ? "bg-zinc-900 text-white shadow-sm"
+                            : "border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50"
+                        }`}>
+                        {key === "pacing" ? "Group Pacing" : "Group Assignments"}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <button type="button" onClick={() => setShowModal(false)}
+                className="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50">
+                Close
+              </button>
+            </div>
+
+            {/* Modal body */}
+            <div className="min-h-0 flex-1 overflow-y-auto p-6">
+              {activeResult === "pacing" && results.pacing && (
+                <PacingScriptResultPanel
+                  result={results.pacing}
+                  pacingMatches={pacingMatches}
+                  csvAnnotations={csvAnnotations}
+                />
+              )}
+              {activeResult === "assignment" && (
+                <ScriptResultPanel result={results.assignment} />
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>
