@@ -29,10 +29,7 @@ type GroupRow = {
   playerUserIds: string[];
 };
 
-type PacingEventType =
-  | "start hole"
-  | "finish hole"
-  | "off course";
+type PacingEventType = "hole" | "off course";
 
 type PacingRow = {
   id: string;
@@ -53,11 +50,7 @@ type SessionEventRow = {
   time: string;
 };
 
-const PACING_EVENT_TYPES: PacingEventType[] = [
-  "start hole",
-  "finish hole",
-  "off course",
-];
+const PACING_EVENT_TYPES: PacingEventType[] = ["hole", "off course"];
 
 const SESSION_EVENT_TYPES: SessionEventType[] = [
   "behind pace",
@@ -267,9 +260,7 @@ export default function SessionEditor({
   );
 
   function getLandmarkOptionsForPacingEvent(eventType: PacingEventType): LandmarkOption[] {
-    if (eventType === "start hole" || eventType === "finish hole") {
-      return holeOptions;
-    }
+    if (eventType === "hole") return holeOptions;
     return offCourseOptions;
   }
 
@@ -277,7 +268,7 @@ export default function SessionEditor({
   function addPacingRow() {
     setPacingRows((prev) => [
       ...prev,
-      { id: makeLocalId(), groupId: "", eventType: "start hole", landmark: "", startTime: "", endTime: "" },
+      { id: makeLocalId(), groupId: "", eventType: "hole", landmark: "", startTime: "", endTime: "" },
     ]);
   }
 
