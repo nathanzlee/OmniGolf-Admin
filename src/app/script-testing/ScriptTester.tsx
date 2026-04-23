@@ -405,6 +405,7 @@ export default function ScriptTester({ completedSessions }: { completedSessions:
   const assignmentRef = useRef<HTMLInputElement>(null);
 
   const [jsonText,          setJsonText]          = useState("");
+  const [jsonSaveError,     setJsonSaveError]     = useState(false);
   const [isLoadingSession,  setIsLoadingSession]  = useState(false);
   const jsonInputRef = useRef<HTMLInputElement>(null);
 
@@ -428,7 +429,12 @@ export default function ScriptTester({ completedSessions }: { completedSessions:
 
   useEffect(() => {
     if (!jsonText) return;
-    try { localStorage.setItem(LS_KEYS.json, jsonText); } catch { /* quota */ }
+    try {
+      localStorage.setItem(LS_KEYS.json, jsonText);
+      setJsonSaveError(false);
+    } catch {
+      setJsonSaveError(true);
+    }
   }, [jsonText]);
 
   // ── Pacing accuracy metrics ───────────────────────────────────────────────
@@ -639,9 +645,21 @@ export default function ScriptTester({ completedSessions }: { completedSessions:
               {jsonText ? "Replace with uploaded file" : "Or upload a .json file"}
             </button>
           </div>
-          {jsonText && (
-            <p className="mt-2 text-xs text-zinc-500">{isLoadingSession ? "Loading…" : "✓ JSON loaded"}</p>
-          )}
+          {jsonText && !isLoadingSession && (() => {
+            let sessionName: string | null = null;
+            try { sessionName = JSON.parse(jsonText)?.session_name ?? null; } catch { /* ignore */ }
+            return (
+              <div className="mt-2 space-y-1">
+                <p className="text-xs text-zinc-500">
+                  ✓ {sessionName ? <><span className="font-medium text-zinc-700">{sessionName}</span> loaded</> : "JSON loaded"}
+                </p>
+                {jsonSaveError && (
+                  <p className="text-xs text-amber-600">⚠ JSON too large to persist — you may need to reload it next visit.</p>
+                )}
+              </div>
+            );
+          })()}
+          {isLoadingSession && <p className="mt-2 text-xs text-zinc-500">Loading…</p>}
           <input ref={jsonInputRef} type="file" accept=".json" className="hidden" onChange={handleJsonUpload} />
         </div>
       </div>
