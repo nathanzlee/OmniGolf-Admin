@@ -74,6 +74,13 @@ type GroupPin = {
   playerCount: number;
 };
 
+type SessionOption = {
+  id: string;
+  name: string;
+  sessionDate: string | null;
+  courseName: string | null;
+};
+
 type ViewMode = "players" | "groups";
 type PlaybackSpeed = 1 | 2 | 4;
 
@@ -120,7 +127,7 @@ function sameCenter(
   return Math.abs(a[0] - b[0]) < epsilon && Math.abs(a[1] - b[1]) < epsilon;
 }
 
-export default function SessionVisualizer() {
+export default function SessionVisualizer({ completedSessions }: { completedSessions: SessionOption[] }) {
   const [data, setData] = useState<SessionExport | null>(null);
   const [jsonText, setJsonText] = useState("");
   const [error, setError] = useState("");
@@ -132,6 +139,8 @@ export default function SessionVisualizer() {
   const [playbackSpeed, setPlaybackSpeed] = useState<PlaybackSpeed>(1);
   const [mapCenterOverride, setMapCenterOverride] = useState<[number, number] | null>(null);
   const [mapZoomOverride, setMapZoomOverride] = useState<number | null>(null);
+
+  const [isLoadingSession, setIsLoadingSession] = useState(false);
 
   const restoringRef = useRef(false);
 
@@ -381,6 +390,22 @@ export default function SessionVisualizer() {
     }
   }
 
+  async function loadSession(sessionId: string) {
+    if (!sessionId) return;
+    setIsLoadingSession(true);
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/export`);
+      if (!res.ok) throw new Error(`Export failed: ${res.status}`);
+      const text = JSON.stringify(await res.json(), null, 2);
+      setJsonText(text);
+      loadParsedJson(text);
+    } catch (e: any) {
+      setError(e?.message ?? "Failed to load session.");
+    } finally {
+      setIsLoadingSession(false);
+    }
+  }
+
   async function onFileSelected(file: File) {
     const text = await file.text();
     setJsonText(text);
@@ -456,7 +481,23 @@ export default function SessionVisualizer() {
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <select
+            defaultValue=""
+            disabled={isLoadingSession}
+            onChange={(e) => { void loadSession(e.target.value); e.currentTarget.value = ""; }}
+            className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-800 shadow-sm outline-none focus:border-zinc-400 disabled:opacity-50"
+          >
+            <option value="">Load completed session…</option>
+            {completedSessions.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+                {s.courseName ? ` — ${s.courseName}` : ""}
+                {s.sessionDate ? ` (${s.sessionDate})` : ""}
+              </option>
+            ))}
+          </select>
+
           <label className="cursor-pointer rounded-lg border border-zinc-200 bg-white px-4 py-2 text-sm font-medium text-zinc-800 shadow-sm hover:bg-zinc-50">
             Upload JSON
             <input
