@@ -1,6 +1,7 @@
 import AdminNav from "@/components/AdminNav";
-import SessionVisualizer from "./SessionVisualizer";
-import { listSessions } from "../actions";
+import SessionVisualizer from "../../session-visualizer/SessionVisualizer";
+import SessionSubnav from "../SessionSubnav";
+import { listSessions } from "../../actions";
 
 export default async function SessionVisualizerPage() {
   const allSessions = await listSessions();
@@ -19,9 +20,12 @@ export default async function SessionVisualizerPage() {
   return (
     <main className="h-screen overflow-hidden bg-zinc-50">
       <div className="mx-auto flex h-full max-w-7xl flex-col px-6 py-6">
-        <AdminNav current="session-visualizer" />
-        <div className="min-h-0 flex-1">
-          <SessionVisualizer completedSessions={completedSessions} />
+        <AdminNav current="sessions" />
+        <div className="flex min-h-0 flex-1 gap-6">
+          <SessionSubnav />
+          <div className="min-h-0 flex-1">
+            <SessionVisualizer completedSessions={completedSessions} />
+          </div>
         </div>
       </div>
     </main>

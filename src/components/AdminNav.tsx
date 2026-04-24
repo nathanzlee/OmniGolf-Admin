@@ -5,7 +5,7 @@ import Link from "next/link";
 export default function AdminNav({
   current,
 }: {
-  current: "courses" | "sessions" | "session-visualizer" | "script-testing";
+  current: "courses" | "sessions" | "script-testing";
 }) {
   const base =
     "rounded-lg px-3 py-2 text-sm font-medium transition-colors";
@@ -30,14 +30,6 @@ export default function AdminNav({
         Sessions
       </Link>
 
-      <Link
-        href="/session-visualizer"
-        className={`${base} ${
-          current === "session-visualizer" ? active : inactive
-        }`}
-      >
-        Session Visualizer
-      </Link>
 
       <Link
         href="/script-testing"
