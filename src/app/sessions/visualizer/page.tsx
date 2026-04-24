@@ -25,7 +25,7 @@ export default async function SessionVisualizerPage() {
       </div>
 
       {/* Centered content */}
-      <div className="mx-auto flex h-full max-w-7xl flex-col px-6 py-6">
+      <div className="mx-auto flex h-full max-w-6xl flex-col px-6 py-6">
         <AdminNav current="sessions" />
         <div className="min-h-0 flex-1">
           <SessionVisualizer completedSessions={completedSessions} />
