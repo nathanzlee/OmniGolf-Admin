@@ -8,13 +8,13 @@ export default async function SessionsPage() {
 
   return (
     <main className="min-h-screen bg-zinc-50">
-      <div className="mx-auto max-w-6xl px-6 py-8">
+      <div className="px-6 py-8">
         <AdminNav current="sessions" />
 
         <div className="flex gap-6">
           <SessionSubnav />
 
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0 flex-1 max-w-5xl">
             <div className="mb-6 flex items-start justify-between gap-4">
               <div>
                 <h1 className="text-xl font-semibold text-zinc-900">Sessions</h1>
