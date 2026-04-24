@@ -19,13 +19,16 @@ export default async function SessionVisualizerPage() {
 
   return (
     <main className="h-screen overflow-hidden bg-zinc-50">
+      {/* Side nav — fixed to left side of screen */}
+      <div className="fixed left-4 top-24 z-10">
+        <SessionSubnav />
+      </div>
+
+      {/* Centered content */}
       <div className="mx-auto flex h-full max-w-7xl flex-col px-6 py-6">
         <AdminNav current="sessions" />
-        <div className="flex min-h-0 flex-1 gap-6">
-          <SessionSubnav />
-          <div className="min-h-0 flex-1">
-            <SessionVisualizer completedSessions={completedSessions} />
-          </div>
+        <div className="min-h-0 flex-1">
+          <SessionVisualizer completedSessions={completedSessions} />
         </div>
       </div>
     </main>
