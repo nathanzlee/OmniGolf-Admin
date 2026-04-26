@@ -1,9 +1,4 @@
-import {
-  getCourse,
-  getCourseHoles,
-  getCourseLandmarks,
-} from "../../actions";
-import CourseEditor from "./CourseEditor";
+import { redirect } from "next/navigation";
 
 export default async function CourseDetailPage({
   params,
@@ -11,18 +6,5 @@ export default async function CourseDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-
-  const [course, holes, landmarks] = await Promise.all([
-    getCourse(id),
-    getCourseHoles(id),
-    getCourseLandmarks(id),
-  ]);
-
-  return (
-    <CourseEditor
-      course={course}
-      initialHoles={holes}
-      initialLandmarks={landmarks}
-    />
-  );
+  redirect(`/courses/build?courseId=${id}`);
 }

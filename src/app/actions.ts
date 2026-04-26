@@ -19,6 +19,7 @@ export type HoleInput = {
   greenLat: number;
   greenLng: number;
   allottedTime: number;
+  cartPathPoints?: { lat: number; lng: number }[];
 };
 
 export type CourseLandmarkInput = {
@@ -121,6 +122,28 @@ export async function getCourseLandmarks(
   });
 }
 
+export type CourseCartPath = {
+  holeNumber: number;
+  coordinates: { lat: number; lng: number }[];
+};
+
+export async function getCourseCartPaths(courseId: string): Promise<CourseCartPath[]> {
+  assertUuid(courseId, "getCourseCartPaths");
+
+  const supabase = supabaseServer();
+  const { data, error } = await supabase
+    .from("course_hole_cart_paths")
+    .select("coordinates, course_holes!inner(hole_number)")
+    .eq("course_id", courseId);
+
+  if (error) throw new Error(`getCourseCartPaths failed: ${error.message}`);
+
+  return (data ?? []).map((row: any) => ({
+    holeNumber: row.course_holes.hole_number,
+    coordinates: Array.isArray(row.coordinates) ? row.coordinates : [],
+  }));
+}
+
 export async function saveCourseHoles(params: {
   courseId?: string;
   courseName: string;
@@ -206,6 +229,53 @@ export async function saveCourseHoles(params: {
     .upsert(holeRows, { onConflict: "course_id,hole_number" });
 
   if (holesErr) throw new Error(`save holes failed: ${holesErr.message}`);
+
+  // ── Cart paths ──────────────────────────────────────────────────────────────
+  // Fetch hole IDs so we can key cart path rows by hole_id
+  const { data: holeRecords, error: holeIdsErr } = await supabase
+    .from("course_holes")
+    .select("id, hole_number")
+    .eq("course_id", finalCourseId);
+
+  if (holeIdsErr) throw new Error(`fetch hole IDs failed: ${holeIdsErr.message}`);
+
+  const holeIdByNumber: Record<number, string> = {};
+  for (const h of holeRecords ?? []) {
+    holeIdByNumber[(h as any).hole_number] = (h as any).id;
+  }
+
+  const holesWithPaths = holes.filter((h) => (h.cartPathPoints ?? []).length > 0);
+  const holesWithoutPaths = holes.filter((h) => (h.cartPathPoints ?? []).length === 0);
+
+  // Delete cart path rows for holes that now have no waypoints
+  const emptyHoleIds = holesWithoutPaths
+    .map((h) => holeIdByNumber[h.holeNumber])
+    .filter(Boolean);
+  if (emptyHoleIds.length > 0) {
+    const { error: deleteCartPathsErr } = await supabase
+      .from("course_hole_cart_paths")
+      .delete()
+      .in("hole_id", emptyHoleIds);
+    if (deleteCartPathsErr) throw new Error(`delete cart paths failed: ${deleteCartPathsErr.message}`);
+  }
+
+  // Upsert cart path rows for holes that have waypoints
+  if (holesWithPaths.length > 0) {
+    const cartPathRows = holesWithPaths
+      .map((h) => ({
+        course_id: finalCourseId,
+        hole_id: holeIdByNumber[h.holeNumber],
+        coordinates: h.cartPathPoints,
+      }))
+      .filter((r) => r.hole_id);
+
+    if (cartPathRows.length > 0) {
+      const { error: upsertCartPathsErr } = await supabase
+        .from("course_hole_cart_paths")
+        .upsert(cartPathRows, { onConflict: "hole_id" });
+      if (upsertCartPathsErr) throw new Error(`save cart paths failed: ${upsertCartPathsErr.message}`);
+    }
+  }
 
   const { error: deleteLandmarksErr } = await supabase
     .from("course_landmarks")

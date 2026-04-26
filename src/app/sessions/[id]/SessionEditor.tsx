@@ -34,7 +34,7 @@ type PacingEventType = "hole" | "off course";
 type PacingRow = {
   id: string;
   groupId: string;
-  eventType: PacingEventType;
+  eventType: PacingEventType | "";
   landmark: string;
   startTime: string;
   endTime: string;
@@ -45,7 +45,7 @@ type SessionEventType = "behind pace" | "group split" | "group join" | "leave co
 type SessionEventRow = {
   id: string;
   groupId: string;
-  eventType: SessionEventType;
+  eventType: SessionEventType | "";
   landmark: string;
   time: string;
 };
@@ -259,16 +259,47 @@ export default function SessionEditor({
     [courseHoles, courseLandmarks]
   );
 
-  function getLandmarkOptionsForPacingEvent(eventType: PacingEventType): LandmarkOption[] {
+  function getLandmarkOptionsForPacingEvent(eventType: PacingEventType | ""): LandmarkOption[] {
     if (eventType === "hole") return holeOptions;
-    return offCourseOptions;
+    if (eventType === "off course") return offCourseOptions;
+    return [];
+  }
+
+  function computeGroupsAtHole(holeNumber: number, excludeEventId?: string): GroupRow[] {
+    const splitJoins = sessionEvents
+      .filter(
+        (ev) =>
+          ev.id !== excludeEventId &&
+          (ev.eventType === "group split" || ev.eventType === "group join") &&
+          ev.landmark.startsWith("hole:")
+      )
+      .map((ev) => ({ ...ev, holeNum: parseInt(ev.landmark.split(":")[1], 10) }))
+      .filter((ev) => !isNaN(ev.holeNum) && ev.holeNum <= holeNumber)
+      .sort((a, b) => a.holeNum - b.holeNum);
+
+    let gs: GroupRow[] = [...groups];
+    for (const ev of splitJoins) {
+      if (ev.eventType === "group split") {
+        const g = gs.find((x) => x.localId === ev.groupId);
+        if (g) {
+          gs = gs.filter((x) => x.localId !== ev.groupId);
+          gs.push(
+            { localId: `${ev.groupId}-a`, label: `${g.label}a`, teeTime: g.teeTime, playerUserIds: [] },
+            { localId: `${ev.groupId}-b`, label: `${g.label}b`, teeTime: g.teeTime, playerUserIds: [] }
+          );
+        }
+      } else if (ev.eventType === "group join") {
+        gs = gs.filter((x) => x.localId !== ev.groupId);
+      }
+    }
+    return gs;
   }
 
   // Group Pacing row functions
   function addPacingRow() {
     setPacingRows((prev) => [
       ...prev,
-      { id: makeLocalId(), groupId: "", eventType: "hole", landmark: "", startTime: "", endTime: "" },
+      { id: makeLocalId(), groupId: "", eventType: "", landmark: "", startTime: "", endTime: "" },
     ]);
   }
 
@@ -286,6 +317,10 @@ export default function SessionEditor({
           if (updated.landmark && !opts.some((o) => o.value === updated.landmark)) {
             updated.landmark = "";
           }
+          updated.groupId = "";
+        }
+        if (field === "landmark") {
+          updated.groupId = "";
         }
         return updated;
       })
@@ -300,7 +335,7 @@ export default function SessionEditor({
   function addSessionEvent() {
     setSessionEvents((prev) => [
       ...prev,
-      { id: makeLocalId(), groupId: "", eventType: "behind pace", landmark: "", time: "" },
+      { id: makeLocalId(), groupId: "", eventType: "", landmark: "", time: "" },
     ]);
   }
 
@@ -319,6 +354,10 @@ export default function SessionEditor({
           } else {
             updated.time = "";
           }
+          updated.groupId = "";
+        }
+        if (field === "landmark") {
+          updated.groupId = "";
         }
         return updated;
       })
@@ -737,81 +776,104 @@ export default function SessionEditor({
                     <table className="w-full min-w-[760px] border-collapse">
                       <thead>
                         <tr className="bg-zinc-50">
-                          <th className={thClass}>Group</th>
                           <th className={thClass}>Event Type</th>
                           <th className={thClass}>Landmark</th>
+                          <th className={thClass}>Group</th>
                           <th className={thClass}>Start Time</th>
                           <th className={thClass}>End Time</th>
                           <th className="border-b border-zinc-200 px-3 py-2" />
                         </tr>
                       </thead>
                       <tbody>
-                        {pacingRows.map((row) => (
-                          <tr key={row.id} className="border-b border-zinc-100 last:border-0">
-                            <td className="px-3 py-2">
-                              <select
-                                value={row.groupId}
-                                onChange={(e) => updatePacingRow(row.id, "groupId", e.target.value)}
-                                className={inputClass + " w-full"}
-                              >
-                                <option value="">—</option>
-                                {groups.map((g, i) => (
-                                  <option key={g.localId} value={g.localId}>
-                                    {g.label.trim() || `Group ${i + 1}`}
-                                  </option>
-                                ))}
-                              </select>
-                            </td>
-                            <td className="px-3 py-2">
-                              <select
-                                value={row.eventType}
-                                onChange={(e) => updatePacingRow(row.id, "eventType", e.target.value)}
-                                className={inputClass + " w-full"}
-                              >
-                                {PACING_EVENT_TYPES.map((t) => (
-                                  <option key={t} value={t}>{t}</option>
-                                ))}
-                              </select>
-                            </td>
-                            <td className="px-3 py-2">
-                              <select
-                                value={row.landmark}
-                                onChange={(e) => updatePacingRow(row.id, "landmark", e.target.value)}
-                                className={inputClass + " w-full"}
-                              >
-                                <option value="">—</option>
-                                {getLandmarkOptionsForPacingEvent(row.eventType).map((o) => (
-                                  <option key={o.value} value={o.value}>{o.label}</option>
-                                ))}
-                              </select>
-                            </td>
-                            <td className="px-3 py-2">
-                              <input
-                                type="time"
-                                value={row.startTime}
-                                onChange={(e) => updatePacingRow(row.id, "startTime", e.target.value)}
-                                className={inputClass}
-                              />
-                            </td>
-                            <td className="px-3 py-2">
-                              <input
-                                type="time"
-                                value={row.endTime}
-                                onChange={(e) => updatePacingRow(row.id, "endTime", e.target.value)}
-                                className={inputClass}
-                              />
-                            </td>
-                            <td className="px-3 py-2 text-right">
-                              <button
-                                type="button"
-                                onClick={() => removePacingRow(row.id)}
-                                className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100"
-                              >
-                                Remove
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
+                        {pacingRows.map((row) => {
+                          const holeNum =
+                            row.eventType === "hole" && row.landmark.startsWith("hole:")
+                              ? parseInt(row.landmark.split(":")[1], 10)
+                              : null;
+                          const groupsForRow =
+                            row.eventType === "off course"
+                              ? groups
+                              : holeNum !== null
+                              ? computeGroupsAtHole(holeNum)
+                              : [];
+                          const landmarkEnabled = row.eventType !== "";
+                          const groupEnabled =
+                            row.eventType === "off course" ||
+                            (row.eventType === "hole" && row.landmark !== "");
+                          const timesEnabled = groupEnabled;
+                          const dc = " disabled:opacity-40 disabled:cursor-not-allowed";
+                          return (
+                            <tr key={row.id} className="border-b border-zinc-100 last:border-0">
+                              <td className="px-3 py-2">
+                                <select
+                                  value={row.eventType}
+                                  onChange={(e) => updatePacingRow(row.id, "eventType", e.target.value)}
+                                  className={inputClass + " w-full"}
+                                >
+                                  <option value="">— select —</option>
+                                  {PACING_EVENT_TYPES.map((t) => (
+                                    <option key={t} value={t}>{t}</option>
+                                  ))}
+                                </select>
+                              </td>
+                              <td className="px-3 py-2">
+                                <select
+                                  value={row.landmark}
+                                  onChange={(e) => updatePacingRow(row.id, "landmark", e.target.value)}
+                                  disabled={!landmarkEnabled}
+                                  className={inputClass + " w-full" + dc}
+                                >
+                                  <option value="">—</option>
+                                  {getLandmarkOptionsForPacingEvent(row.eventType).map((o) => (
+                                    <option key={o.value} value={o.value}>{o.label}</option>
+                                  ))}
+                                </select>
+                              </td>
+                              <td className="px-3 py-2">
+                                <select
+                                  value={row.groupId}
+                                  onChange={(e) => updatePacingRow(row.id, "groupId", e.target.value)}
+                                  disabled={!groupEnabled}
+                                  className={inputClass + " w-full" + dc}
+                                >
+                                  <option value="">—</option>
+                                  {groupsForRow.map((g, i) => (
+                                    <option key={g.localId} value={g.localId}>
+                                      {g.label.trim() || `Group ${i + 1}`}
+                                    </option>
+                                  ))}
+                                </select>
+                              </td>
+                              <td className="px-3 py-2">
+                                <input
+                                  type="time"
+                                  value={row.startTime}
+                                  onChange={(e) => updatePacingRow(row.id, "startTime", e.target.value)}
+                                  disabled={!timesEnabled}
+                                  className={inputClass + dc}
+                                />
+                              </td>
+                              <td className="px-3 py-2">
+                                <input
+                                  type="time"
+                                  value={row.endTime}
+                                  onChange={(e) => updatePacingRow(row.id, "endTime", e.target.value)}
+                                  disabled={!timesEnabled}
+                                  className={inputClass + dc}
+                                />
+                              </td>
+                              <td className="px-3 py-2 text-right">
+                                <button
+                                  type="button"
+                                  onClick={() => removePacingRow(row.id)}
+                                  className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100"
+                                >
+                                  Remove
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -852,80 +914,104 @@ export default function SessionEditor({
                 <table className="w-full min-w-[600px] border-collapse">
                   <thead>
                     <tr className="bg-zinc-50">
-                      <th className={thClass}>Group</th>
                       <th className={thClass}>Event Type</th>
                       <th className={thClass}>Landmark</th>
+                      <th className={thClass}>Group</th>
                       <th className={thClass}>Time</th>
                       <th className="border-b border-zinc-200 px-3 py-2" />
                     </tr>
                   </thead>
                   <tbody>
-                    {sessionEvents.map((event) => (
-                      <tr key={event.id} className="border-b border-zinc-100 last:border-0">
-                        <td className="px-3 py-2">
-                          <select
-                            value={event.groupId}
-                            onChange={(e) => updateSessionEvent(event.id, "groupId", e.target.value)}
-                            className={inputClass + " w-full"}
-                          >
-                            <option value="">—</option>
-                            {groups.map((g, i) => (
-                              <option key={g.localId} value={g.localId}>
-                                {g.label.trim() || `Group ${i + 1}`}
-                              </option>
-                            ))}
-                          </select>
-                        </td>
-                        <td className="px-3 py-2">
-                          <select
-                            value={event.eventType}
-                            onChange={(e) => updateSessionEvent(event.id, "eventType", e.target.value)}
-                            className={inputClass + " w-full"}
-                          >
-                            {SESSION_EVENT_TYPES.map((t) => (
-                              <option key={t} value={t}>{t}</option>
-                            ))}
-                          </select>
-                        </td>
-                        <td className="px-3 py-2">
-                          {event.eventType !== "leave course" ? (
+                    {sessionEvents.map((event) => {
+                      const isLeave = event.eventType === "leave course";
+                      const holeNum =
+                        !isLeave && event.landmark.startsWith("hole:")
+                          ? parseInt(event.landmark.split(":")[1], 10)
+                          : null;
+                      const groupsForRow =
+                        isLeave || event.landmark === "off course"
+                          ? groups
+                          : holeNum !== null
+                          ? computeGroupsAtHole(holeNum, event.id)
+                          : [];
+                      const landmarkEnabled = event.eventType !== "" && !isLeave;
+                      const groupEnabled =
+                        event.eventType !== "" && (isLeave || event.landmark !== "");
+                      const dc = " disabled:opacity-40 disabled:cursor-not-allowed";
+                      const eventLandmarkOpts: LandmarkOption[] = [
+                        { value: "off course", label: "Off course" },
+                        ...holeOptions,
+                      ];
+                      return (
+                        <tr key={event.id} className="border-b border-zinc-100 last:border-0">
+                          <td className="px-3 py-2">
                             <select
-                              value={event.landmark}
-                              onChange={(e) => updateSessionEvent(event.id, "landmark", e.target.value)}
+                              value={event.eventType}
+                              onChange={(e) => updateSessionEvent(event.id, "eventType", e.target.value)}
                               className={inputClass + " w-full"}
                             >
-                              <option value="">—</option>
-                              {holeOptions.map((o) => (
-                                <option key={o.value} value={o.value}>{o.label}</option>
+                              <option value="">— select —</option>
+                              {SESSION_EVENT_TYPES.map((t) => (
+                                <option key={t} value={t}>{t}</option>
                               ))}
                             </select>
-                          ) : (
-                            <span className="text-sm text-zinc-400">—</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2">
-                          {event.eventType === "leave course" ? (
-                            <input
-                              type="time"
-                              value={event.time}
-                              onChange={(e) => updateSessionEvent(event.id, "time", e.target.value)}
-                              className={inputClass}
-                            />
-                          ) : (
-                            <span className="text-sm text-zinc-400">—</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2 text-right">
-                          <button
-                            type="button"
-                            onClick={() => removeSessionEvent(event.id)}
-                            className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100"
-                          >
-                            Remove
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                          </td>
+                          <td className="px-3 py-2">
+                            {!isLeave ? (
+                              <select
+                                value={event.landmark}
+                                onChange={(e) => updateSessionEvent(event.id, "landmark", e.target.value)}
+                                disabled={!landmarkEnabled}
+                                className={inputClass + " w-full" + dc}
+                              >
+                                <option value="">—</option>
+                                {eventLandmarkOpts.map((o) => (
+                                  <option key={o.value} value={o.value}>{o.label}</option>
+                                ))}
+                              </select>
+                            ) : (
+                              <span className="text-sm text-zinc-400">—</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2">
+                            <select
+                              value={event.groupId}
+                              onChange={(e) => updateSessionEvent(event.id, "groupId", e.target.value)}
+                              disabled={!groupEnabled}
+                              className={inputClass + " w-full" + dc}
+                            >
+                              <option value="">—</option>
+                              {groupsForRow.map((g, i) => (
+                                <option key={g.localId} value={g.localId}>
+                                  {g.label.trim() || `Group ${i + 1}`}
+                                </option>
+                              ))}
+                            </select>
+                          </td>
+                          <td className="px-3 py-2">
+                            {isLeave ? (
+                              <input
+                                type="time"
+                                value={event.time}
+                                onChange={(e) => updateSessionEvent(event.id, "time", e.target.value)}
+                                className={inputClass}
+                              />
+                            ) : (
+                              <span className="text-sm text-zinc-400">—</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 text-right">
+                            <button
+                              type="button"
+                              onClick={() => removeSessionEvent(event.id)}
+                              className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100"
+                            >
+                              Remove
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

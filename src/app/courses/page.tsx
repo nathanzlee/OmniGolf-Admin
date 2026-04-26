@@ -18,7 +18,7 @@ export default async function CoursesPage() {
           </div>
 
           <Link
-            href="/courses/new"
+            href="/courses/build"
             className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-zinc-800"
           >
             + Add new course
@@ -46,7 +46,7 @@ export default async function CoursesPage() {
                 {courses.length === 0 ? (
                   <tr>
                     <td className="px-4 py-6 text-sm text-zinc-600" colSpan={3}>
-                      No courses yet. Click “Add new course”.
+                      No courses yet. Click “+ Add new course”.
                     </td>
                   </tr>
                 ) : (
@@ -60,7 +60,7 @@ export default async function CoursesPage() {
                       </td>
                       <td className="border-b border-zinc-100 px-4 py-3 text-right">
                         <Link
-                          href={`/courses/${c.id}`}
+                          href={`/courses/build?courseId=${c.id}`}
                           className="text-sm font-medium text-zinc-900 underline decoration-zinc-300 hover:decoration-zinc-600"
                         >
                           Edit
@@ -74,7 +74,7 @@ export default async function CoursesPage() {
           </div>
 
           <div className="px-4 py-3 text-xs text-zinc-500">
-            Click “Edit” to update greens and tee boxes for all 18 holes.
+            Click “Edit” to update hole coordinates, cart paths, and landmarks.
           </div>
         </div>
       </div>

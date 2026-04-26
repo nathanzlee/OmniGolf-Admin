@@ -72,6 +72,36 @@ const groupIcon = L.divIcon({
   iconAnchor: [9, 9],
 });
 
+const selectedPlayerIcon = L.divIcon({
+  className: "",
+  html: `
+    <div style="
+      width: 14px;
+      height: 14px;
+      border-radius: 9999px;
+      background: #1e3a8a;
+      box-shadow: 0 0 0 2px rgba(30,58,138,0.5), 0 1px 3px rgba(0,0,0,0.3);
+    "></div>
+  `,
+  iconSize: [14, 14],
+  iconAnchor: [7, 7],
+});
+
+const selectedGroupIcon = L.divIcon({
+  className: "",
+  html: `
+    <div style="
+      width: 18px;
+      height: 18px;
+      border-radius: 9999px;
+      background: #14532d;
+      box-shadow: 0 0 0 2px rgba(20,83,45,0.5), 0 1px 3px rgba(0,0,0,0.3);
+    "></div>
+  `,
+  iconSize: [18, 18],
+  iconAnchor: [9, 9],
+});
+
 const landmarkIcon = L.divIcon({
   className: "",
   html: `
@@ -116,6 +146,7 @@ function MapAutoFocus({
   landmarks,
   selectedPlayerId,
   selectedGroupId,
+  dataKey,
   playerPopupRefs,
   groupPopupRefs,
 }: {
@@ -125,6 +156,7 @@ function MapAutoFocus({
   landmarks: CourseLandmark[];
   selectedPlayerId: string | null;
   selectedGroupId: string | null;
+  dataKey: number;
   playerPopupRefs: React.MutableRefObject<Record<string, L.Marker | null>>;
   groupPopupRefs: React.MutableRefObject<Record<string, L.Marker | null>>;
 }) {
@@ -133,11 +165,25 @@ function MapAutoFocus({
   const lastSelectedPlayerRef = useRef<string | null>(null);
   const lastSelectedGroupRef = useRef<string | null>(null);
 
+  // Keep latest pins in refs so effects can read them without causing re-runs every tick
+  const playerPinsRef = useRef(playerPins);
+  const groupPinsRef = useRef(groupPins);
+  playerPinsRef.current = playerPins;
+  groupPinsRef.current = groupPins;
+
+  // Reset initial fit flag when new data is loaded
   useEffect(() => {
+    hasFitInitially.current = false;
+  }, [dataKey]);
+
+  useEffect(() => {
+    const pins = playerPinsRef.current;
+    const gPins = groupPinsRef.current;
+
     if (viewMode === "players" && selectedPlayerId) {
       if (lastSelectedPlayerRef.current === selectedPlayerId) return;
 
-      const selected = playerPins.find((p) => p.userId === selectedPlayerId);
+      const selected = pins.find((p) => p.userId === selectedPlayerId);
       if (selected) {
         lastSelectedPlayerRef.current = selectedPlayerId;
         map.setView(
@@ -157,7 +203,7 @@ function MapAutoFocus({
     if (viewMode === "groups" && selectedGroupId) {
       if (lastSelectedGroupRef.current === selectedGroupId) return;
 
-      const selected = groupPins.find((g) => g.groupId === selectedGroupId);
+      const selected = gPins.find((g) => g.groupId === selectedGroupId);
       if (selected) {
         lastSelectedGroupRef.current = selectedGroupId;
         map.setView(
@@ -185,8 +231,8 @@ function MapAutoFocus({
 
     const modePoints: [number, number][] =
       viewMode === "players"
-        ? playerPins.map((p) => [p.latitude, p.longitude] as [number, number])
-        : groupPins.map((g) => [g.latitude, g.longitude] as [number, number]);
+        ? pins.map((p) => [p.latitude, p.longitude] as [number, number])
+        : gPins.map((g) => [g.latitude, g.longitude] as [number, number]);
 
     const points: [number, number][] = [
       ...modePoints,
@@ -206,13 +252,12 @@ function MapAutoFocus({
   }, [
     map,
     viewMode,
-    playerPins,
-    groupPins,
     landmarks,
     selectedPlayerId,
     selectedGroupId,
     playerPopupRefs,
     groupPopupRefs,
+    dataKey,
   ]);
 
   return null;
@@ -227,6 +272,7 @@ export default function SessionMap({
   viewMode,
   selectedPlayerId,
   selectedGroupId,
+  dataKey,
   onViewChange,
 }: {
   center: [number, number];
@@ -237,6 +283,7 @@ export default function SessionMap({
   viewMode: ViewMode;
   selectedPlayerId: string | null;
   selectedGroupId: string | null;
+  dataKey: number;
   onViewChange?: (center: [number, number], zoom: number) => void;
 }) {
   const playerMarkerRefs = useRef<Record<string, L.Marker | null>>({});
@@ -262,6 +309,7 @@ export default function SessionMap({
         landmarks={landmarks}
         selectedPlayerId={selectedPlayerId}
         selectedGroupId={selectedGroupId}
+        dataKey={dataKey}
         playerPopupRefs={playerMarkerRefs}
         groupPopupRefs={groupMarkerRefs}
       />
@@ -286,7 +334,7 @@ export default function SessionMap({
           <Marker
             key={player.userId}
             position={[player.latitude, player.longitude]}
-            icon={playerIcon}
+            icon={player.userId === selectedPlayerId ? selectedPlayerIcon : playerIcon}
             ref={(ref) => {
               playerMarkerRefs.current[player.userId] = ref;
             }}
@@ -307,7 +355,7 @@ export default function SessionMap({
           <Marker
             key={group.groupId}
             position={[group.latitude, group.longitude]}
-            icon={groupIcon}
+            icon={group.groupId === selectedGroupId ? selectedGroupIcon : groupIcon}
             ref={(ref) => {
               groupMarkerRefs.current[group.groupId] = ref;
             }}

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { TestCase, loadTestCases, testCaseToExportJson } from "@/lib/testCases";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -11,30 +12,21 @@ type ScriptResult = {
   stderr: string;
   error?: string;
 } | null;
-type RunResults = { pacing: ScriptResult; assignment: ScriptResult };
-
-type SessionOption = {
-  id: string;
-  name: string;
-  sessionDate: string | null;
-  courseName: string | null;
-};
 
 type ScriptSlot = { name: string | null; b64: string | null };
 
-// Shape of rows stored in omnigolf-group-pacing-v1-<sessionId>
+// Pacing rows stored in localStorage for real sessions
 type StoredPacingRow = {
   id: string;
   groupId: string;
   eventType: string;
-  landmark: string;  // e.g. "hole:3"
-  startTime: string; // "HH:MM"
-  endTime: string;   // "HH:MM"
+  landmark: string;
+  startTime: string;
+  endTime: string;
 };
 
 type PacingMatchRow = {
   groupLabel: string;
-  csvFilename: string;
   holeNumber: number;
   actualStart: string;
   actualEnd: string;
@@ -49,16 +41,32 @@ type PacingMatchRow = {
 type RowAnnotation = { label: string; match: boolean };
 type CsvAnnotations = Record<string, Record<string, RowAnnotation[]>>;
 
+type SessionOption = {
+  id: string;
+  name: string;
+  sessionDate: string | null;
+  courseName: string | null;
+};
+
+type SessionRunResult = {
+  sessionId: string;
+  sessionName: string;
+  isTestCase: boolean;
+  pacing: ScriptResult;
+  assignment: ScriptResult;
+  pacingMatches: PacingMatchRow[];
+  csvAnnotations: CsvAnnotations;
+};
+
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const MATCH_THRESHOLD_MIN = 2.5;
 
 const LS_KEYS = {
-  pacingName:     "omnigolf-script-pacing-name",
-  pacingB64:      "omnigolf-script-pacing-b64",
+  pacingName: "omnigolf-script-pacing-name",
+  pacingB64: "omnigolf-script-pacing-b64",
   assignmentName: "omnigolf-script-assignment-name",
-  assignmentB64:  "omnigolf-script-assignment-b64",
-  json:           "omnigolf-script-json",
+  assignmentB64: "omnigolf-script-assignment-b64",
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -80,7 +88,6 @@ function absDiffMin(a: string, b: string): number {
   return Math.abs(hhmmToMin(a) - hhmmToMin(b));
 }
 
-// Mirrors Python's group_label_to_filename()
 function groupLabelToFilename(label: string): string {
   const slug = label
     .replace(/[^\w\s]/g, "")
@@ -88,6 +95,109 @@ function groupLabelToFilename(label: string): string {
     .toLowerCase()
     .replace(/\s+/g, "_");
   return `${slug}.csv`;
+}
+
+function computePacingMetrics(
+  storedRows: StoredPacingRow[],
+  pacingResult: ScriptResult,
+  sessionData: any
+): { pacingMatches: PacingMatchRow[]; csvAnnotations: CsvAnnotations } {
+  if (!pacingResult || !sessionData) return { pacingMatches: [], csvAnnotations: {} };
+  try {
+    const groupIdToLabel = new Map<string, string>(
+      (sessionData.groups ?? []).map((g: any) => [
+        (g.group_id ?? g.id) as string,
+        (g.label ?? "") as string,
+      ])
+    );
+
+    const csvMap = new Map<string, string>(
+      (pacingResult.csvFiles ?? []).map((f) => [f.name, f.content])
+    );
+
+    const matches: PacingMatchRow[] = [];
+    const annotations: CsvAnnotations = {};
+
+    const addAnnotation = (filename: string, ts: string, ann: RowAnnotation) => {
+      if (!annotations[filename]) annotations[filename] = {};
+      if (!annotations[filename][ts]) annotations[filename][ts] = [];
+      annotations[filename][ts].push(ann);
+    };
+
+    for (const row of storedRows) {
+      if (row.eventType !== "hole") continue;
+      if (!row.landmark?.startsWith("hole:")) continue;
+      const holeNumber = parseInt(row.landmark.split(":")[1], 10);
+      if (isNaN(holeNumber)) continue;
+
+      const groupLabel = row.groupId
+        ? (groupIdToLabel.get(row.groupId) ?? null)
+        : null;
+      if (!groupLabel) continue;
+
+      const csvFilename = groupLabelToFilename(groupLabel);
+      const csvContent = csvMap.get(csvFilename) ?? null;
+
+      let predictedStart: string | null = null;
+      let predictedEnd: string | null = null;
+
+      if (csvContent) {
+        const { headers, rows: csvRows } = parseCSV(csvContent);
+        const tsCol = headers.indexOf("timestamp");
+        const phCol = headers.indexOf("predicted_hole");
+        if (tsCol !== -1 && phCol !== -1) {
+          const holeRows = csvRows.filter((r) => r[phCol] === String(holeNumber));
+          if (holeRows.length > 0) {
+            predictedStart = holeRows[0][tsCol];
+            predictedEnd = holeRows[holeRows.length - 1][tsCol];
+          }
+        }
+      }
+
+      const startDelta =
+        row.startTime && predictedStart
+          ? absDiffMin(row.startTime, predictedStart)
+          : null;
+      const endDelta =
+        row.endTime && predictedEnd
+          ? absDiffMin(row.endTime, predictedEnd)
+          : null;
+      const startMatch =
+        startDelta !== null ? startDelta <= MATCH_THRESHOLD_MIN : null;
+      const endMatch =
+        endDelta !== null ? endDelta <= MATCH_THRESHOLD_MIN : null;
+
+      matches.push({
+        groupLabel,
+        holeNumber,
+        actualStart: row.startTime || "",
+        actualEnd: row.endTime || "",
+        predictedStart,
+        predictedEnd,
+        startDeltaMin: startDelta,
+        endDeltaMin: endDelta,
+        startMatch,
+        endMatch,
+      });
+
+      if (predictedStart) {
+        addAnnotation(csvFilename, predictedStart, {
+          label: `Hole ${holeNumber} start`,
+          match: startMatch ?? false,
+        });
+      }
+      if (predictedEnd && predictedEnd !== predictedStart) {
+        addAnnotation(csvFilename, predictedEnd, {
+          label: `Hole ${holeNumber} end`,
+          match: endMatch ?? false,
+        });
+      }
+    }
+
+    return { pacingMatches: matches, csvAnnotations: annotations };
+  } catch {
+    return { pacingMatches: [], csvAnnotations: {} };
+  }
 }
 
 const inputClass =
@@ -115,31 +225,57 @@ function ScriptUploadSlot({
         <div className="flex items-center justify-between rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2">
           <span className="truncate font-mono text-xs text-zinc-800">{slot.name}</span>
           <div className="ml-2 flex shrink-0 gap-1.5">
-            <button type="button" onClick={() => inputRef.current?.click()}
-              className="rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs text-zinc-700 hover:bg-zinc-50">
+            <button
+              type="button"
+              onClick={() => inputRef.current?.click()}
+              className="rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs text-zinc-700 hover:bg-zinc-50"
+            >
               Replace
             </button>
-            <button type="button" onClick={onClear}
-              className="rounded-md border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700 hover:bg-red-100">
+            <button
+              type="button"
+              onClick={onClear}
+              className="rounded-md border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700 hover:bg-red-100"
+            >
               Remove
             </button>
           </div>
         </div>
       ) : (
-        <button type="button" onClick={() => inputRef.current?.click()}
-          className="w-full rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-4 py-4 text-center text-sm text-zinc-500 hover:bg-zinc-100">
+        <button
+          type="button"
+          onClick={() => inputRef.current?.click()}
+          className="w-full rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-4 py-4 text-center text-sm text-zinc-500 hover:bg-zinc-100"
+        >
           Click to upload .py file
         </button>
       )}
-      <input ref={inputRef} type="file" accept=".py" className="hidden" onChange={onUpload} />
+      <input
+        ref={inputRef}
+        type="file"
+        accept=".py"
+        className="hidden"
+        onChange={onUpload}
+      />
     </div>
   );
 }
 
-function DeltaCell({ deltaMin, match }: { deltaMin: number | null; match: boolean | null }) {
-  if (deltaMin === null || match === null) return <td className="px-3 py-2 text-xs text-zinc-400">—</td>;
+function DeltaCell({
+  deltaMin,
+  match,
+}: {
+  deltaMin: number | null;
+  match: boolean | null;
+}) {
+  if (deltaMin === null || match === null)
+    return <td className="px-3 py-2 text-xs text-zinc-400">—</td>;
   return (
-    <td className={`px-3 py-2 text-xs font-medium whitespace-nowrap ${match ? "text-green-600" : "text-red-500"}`}>
+    <td
+      className={`px-3 py-2 text-xs font-medium whitespace-nowrap ${
+        match ? "text-green-600" : "text-red-500"
+      }`}
+    >
       {deltaMin.toFixed(1)} min {match ? "✓" : "✗"}
     </td>
   );
@@ -148,19 +284,21 @@ function DeltaCell({ deltaMin, match }: { deltaMin: number | null; match: boolea
 function PacingMetrics({ matches }: { matches: PacingMatchRow[] }) {
   if (matches.length === 0) return null;
 
-  const startChecks  = matches.filter((m) => m.startMatch !== null);
-  const endChecks    = matches.filter((m) => m.endMatch !== null);
-  const totalChecks  = startChecks.length + endChecks.length;
-  const totalMatched = startChecks.filter((m) => m.startMatch).length
-                     + endChecks.filter((m) => m.endMatch).length;
-
+  const startChecks = matches.filter((m) => m.startMatch !== null);
+  const endChecks = matches.filter((m) => m.endMatch !== null);
+  const totalChecks = startChecks.length + endChecks.length;
+  const totalMatched =
+    startChecks.filter((m) => m.startMatch).length +
+    endChecks.filter((m) => m.endMatch).length;
   const allGood = totalMatched === totalChecks && totalChecks > 0;
 
   return (
     <div className="rounded-xl border border-zinc-200 bg-white shadow-sm">
       <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3">
         <h3 className="text-sm font-semibold text-zinc-900">Pacing Accuracy</h3>
-        <span className={`text-xs font-medium ${allGood ? "text-green-600" : "text-zinc-600"}`}>
+        <span
+          className={`text-xs font-medium ${allGood ? "text-green-600" : "text-zinc-600"}`}
+        >
           {totalMatched}/{totalChecks} timestamps matched (±{MATCH_THRESHOLD_MIN} min)
         </span>
       </div>
@@ -180,7 +318,10 @@ function PacingMetrics({ matches }: { matches: PacingMatchRow[] }) {
           </thead>
           <tbody>
             {matches.map((m, i) => (
-              <tr key={i} className="border-b border-zinc-100 last:border-0 text-sm text-zinc-800">
+              <tr
+                key={i}
+                className="border-b border-zinc-100 last:border-0 text-sm text-zinc-800"
+              >
                 <td className="px-3 py-2 whitespace-nowrap">{m.groupLabel}</td>
                 <td className="px-3 py-2">{m.holeNumber}</td>
                 <td className="px-3 py-2">{m.actualStart || "—"}</td>
@@ -218,7 +359,9 @@ function PacingScriptResultPanel({
         <PacingMetrics matches={pacingMatches} />
         <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
           <strong>Error:</strong> {result.error}
-          {result.stderr && <pre className="mt-2 whitespace-pre-wrap font-mono text-xs">{result.stderr}</pre>}
+          {result.stderr && (
+            <pre className="mt-2 whitespace-pre-wrap font-mono text-xs">{result.stderr}</pre>
+          )}
         </div>
       </div>
     );
@@ -230,47 +373,54 @@ function PacingScriptResultPanel({
         <PacingMetrics matches={pacingMatches} />
         <div className="rounded-xl border border-zinc-200 bg-white p-4 text-sm text-zinc-500">
           Script ran successfully but produced no CSV files.
-          {result.stdout && <pre className="mt-2 whitespace-pre-wrap font-mono text-xs text-zinc-700">{result.stdout}</pre>}
+          {result.stdout && (
+            <pre className="mt-2 whitespace-pre-wrap font-mono text-xs text-zinc-700">
+              {result.stdout}
+            </pre>
+          )}
         </div>
       </div>
     );
   }
 
-  const currentFile      = csvFiles[activeTab];
+  const currentFile = csvFiles[activeTab];
   const { headers, rows } = parseCSV(currentFile?.content ?? "");
-  const fileAnnotations  = csvAnnotations[currentFile?.name ?? ""] ?? {};
-  const tsIdx            = headers.indexOf("timestamp");
-  const hasAnnotations   = Object.keys(fileAnnotations).length > 0;
+  const fileAnnotations = csvAnnotations[currentFile?.name ?? ""] ?? {};
+  const tsIdx = headers.indexOf("timestamp");
+  const hasAnnotations = Object.keys(fileAnnotations).length > 0;
 
   return (
     <div className="space-y-3">
       <PacingMetrics matches={pacingMatches} />
-
       <div className="rounded-xl border border-zinc-200 bg-white shadow-sm">
-        {/* File tabs */}
         <div className="flex flex-wrap gap-1 border-b border-zinc-200 px-4 pt-3">
           {csvFiles.map((f, i) => (
-            <button key={f.name} type="button" onClick={() => setActiveTab(i)}
+            <button
+              key={f.name}
+              type="button"
+              onClick={() => setActiveTab(i)}
               className={`-mb-px rounded-t-lg border px-3 py-2 text-xs font-medium transition-colors ${
                 activeTab === i
                   ? "border-zinc-200 border-b-white bg-white text-zinc-900"
                   : "border-transparent text-zinc-500 hover:text-zinc-700"
-              }`}>
+              }`}
+            >
               {f.name}
             </button>
           ))}
         </div>
-
-        {/* Annotated CSV table */}
         <div className="max-h-[55vh] overflow-auto p-4">
           {headers.length === 0 ? (
             <p className="text-sm text-zinc-500">CSV is empty.</p>
           ) : (
             <table className="w-full border-collapse text-sm">
               <thead>
-                <tr className="bg-zinc-50">
+                <tr className="sticky top-0 bg-zinc-50">
                   {headers.map((h) => (
-                    <th key={h} className="border-b border-zinc-200 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-zinc-600 whitespace-nowrap">
+                    <th
+                      key={h}
+                      className="border-b border-zinc-200 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-zinc-600 whitespace-nowrap"
+                    >
                       {h}
                     </th>
                   ))}
@@ -283,18 +433,34 @@ function PacingScriptResultPanel({
               </thead>
               <tbody>
                 {rows.map((row, ri) => {
-                  const ts   = tsIdx >= 0 ? row[tsIdx] : null;
+                  const ts = tsIdx !== -1 ? row[tsIdx] : null;
                   const anns = ts ? (fileAnnotations[ts] ?? []) : [];
+                  const hasAnn = anns.length > 0;
                   return (
-                    <tr key={ri} className={`border-b border-zinc-100 last:border-0 ${anns.length > 0 ? "bg-amber-50" : ""}`}>
+                    <tr
+                      key={ri}
+                      className={`border-b border-zinc-100 last:border-0 ${
+                        hasAnn ? "bg-amber-50" : ""
+                      }`}
+                    >
                       {row.map((cell, ci) => (
-                        <td key={ci} className="px-3 py-2 text-zinc-800 whitespace-nowrap">{cell}</td>
+                        <td
+                          key={ci}
+                          className="px-3 py-2 text-zinc-800 whitespace-nowrap"
+                        >
+                          {cell}
+                        </td>
                       ))}
                       {hasAnnotations && (
                         <td className="px-3 py-2 whitespace-nowrap">
-                          {anns.map((ann, ai) => (
-                            <span key={ai} className={`text-xs font-medium ${ann.match ? "text-green-600" : "text-red-500"}`}>
-                              {ann.label} {ann.match ? "✓" : "✗"}
+                          {anns.map((a, ai) => (
+                            <span
+                              key={ai}
+                              className={`mr-1 text-xs font-medium ${
+                                a.match ? "text-green-600" : "text-red-500"
+                              }`}
+                            >
+                              {a.label} {a.match ? "✓" : "✗"}
                             </span>
                           ))}
                         </td>
@@ -306,12 +472,21 @@ function PacingScriptResultPanel({
             </table>
           )}
         </div>
-
         {(result.stdout || result.stderr) && (
           <details className="border-t border-zinc-200 px-4 py-3">
-            <summary className="cursor-pointer text-xs text-zinc-500 hover:text-zinc-700">Script output</summary>
-            {result.stdout && <pre className="mt-2 whitespace-pre-wrap font-mono text-xs text-zinc-700">{result.stdout}</pre>}
-            {result.stderr && <pre className="mt-2 whitespace-pre-wrap font-mono text-xs text-red-600">{result.stderr}</pre>}
+            <summary className="cursor-pointer text-xs text-zinc-500 hover:text-zinc-700">
+              Script output
+            </summary>
+            {result.stdout && (
+              <pre className="mt-2 whitespace-pre-wrap font-mono text-xs text-zinc-700">
+                {result.stdout}
+              </pre>
+            )}
+            {result.stderr && (
+              <pre className="mt-2 whitespace-pre-wrap font-mono text-xs text-red-600">
+                {result.stderr}
+              </pre>
+            )}
           </details>
         )}
       </div>
@@ -329,7 +504,9 @@ function ScriptResultPanel({ result }: { result: ScriptResult }) {
     return (
       <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
         <strong>Error:</strong> {result.error}
-        {result.stderr && <pre className="mt-2 whitespace-pre-wrap font-mono text-xs">{result.stderr}</pre>}
+        {result.stderr && (
+          <pre className="mt-2 whitespace-pre-wrap font-mono text-xs">{result.stderr}</pre>
+        )}
       </div>
     );
   }
@@ -338,7 +515,11 @@ function ScriptResultPanel({ result }: { result: ScriptResult }) {
     return (
       <div className="rounded-xl border border-zinc-200 bg-white p-4 text-sm text-zinc-500">
         Script ran successfully but produced no CSV files.
-        {result.stdout && <pre className="mt-2 whitespace-pre-wrap font-mono text-xs text-zinc-700">{result.stdout}</pre>}
+        {result.stdout && (
+          <pre className="mt-2 whitespace-pre-wrap font-mono text-xs text-zinc-700">
+            {result.stdout}
+          </pre>
+        )}
       </div>
     );
   }
@@ -349,25 +530,32 @@ function ScriptResultPanel({ result }: { result: ScriptResult }) {
     <div className="rounded-xl border border-zinc-200 bg-white shadow-sm">
       <div className="flex flex-wrap gap-1 border-b border-zinc-200 px-4 pt-3">
         {csvFiles.map((f, i) => (
-          <button key={f.name} type="button" onClick={() => setActiveTab(i)}
+          <button
+            key={f.name}
+            type="button"
+            onClick={() => setActiveTab(i)}
             className={`-mb-px rounded-t-lg border px-3 py-2 text-xs font-medium transition-colors ${
               activeTab === i
                 ? "border-zinc-200 border-b-white bg-white text-zinc-900"
                 : "border-transparent text-zinc-500 hover:text-zinc-700"
-            }`}>
+            }`}
+          >
             {f.name}
           </button>
         ))}
       </div>
-      <div className="overflow-x-auto p-4">
+      <div className="max-h-[55vh] overflow-auto p-4">
         {headers.length === 0 ? (
           <p className="text-sm text-zinc-500">CSV is empty.</p>
         ) : (
           <table className="w-full border-collapse text-sm">
             <thead>
-              <tr className="bg-zinc-50">
+              <tr className="sticky top-0 bg-zinc-50">
                 {headers.map((h) => (
-                  <th key={h} className="border-b border-zinc-200 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-zinc-600 whitespace-nowrap">
+                  <th
+                    key={h}
+                    className="border-b border-zinc-200 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-zinc-600 whitespace-nowrap"
+                  >
                     {h}
                   </th>
                 ))}
@@ -377,7 +565,9 @@ function ScriptResultPanel({ result }: { result: ScriptResult }) {
               {rows.map((row, ri) => (
                 <tr key={ri} className="border-b border-zinc-100 last:border-0">
                   {row.map((cell, ci) => (
-                    <td key={ci} className="px-3 py-2 text-zinc-800 whitespace-nowrap">{cell}</td>
+                    <td key={ci} className="px-3 py-2 text-zinc-800 whitespace-nowrap">
+                      {cell}
+                    </td>
                   ))}
                 </tr>
               ))}
@@ -387,9 +577,19 @@ function ScriptResultPanel({ result }: { result: ScriptResult }) {
       </div>
       {(result.stdout || result.stderr) && (
         <details className="border-t border-zinc-200 px-4 py-3">
-          <summary className="cursor-pointer text-xs text-zinc-500 hover:text-zinc-700">Script output</summary>
-          {result.stdout && <pre className="mt-2 whitespace-pre-wrap font-mono text-xs text-zinc-700">{result.stdout}</pre>}
-          {result.stderr && <pre className="mt-2 whitespace-pre-wrap font-mono text-xs text-red-600">{result.stderr}</pre>}
+          <summary className="cursor-pointer text-xs text-zinc-500 hover:text-zinc-700">
+            Script output
+          </summary>
+          {result.stdout && (
+            <pre className="mt-2 whitespace-pre-wrap font-mono text-xs text-zinc-700">
+              {result.stdout}
+            </pre>
+          )}
+          {result.stderr && (
+            <pre className="mt-2 whitespace-pre-wrap font-mono text-xs text-red-600">
+              {result.stderr}
+            </pre>
+          )}
         </details>
       )}
     </div>
@@ -398,23 +598,27 @@ function ScriptResultPanel({ result }: { result: ScriptResult }) {
 
 // ── Main component ─────────────────────────────────────────────────────────
 
-export default function ScriptTester({ completedSessions }: { completedSessions: SessionOption[] }) {
-  const [pacing,     setPacing]     = useState<ScriptSlot>({ name: null, b64: null });
+export default function ScriptTester({
+  completedSessions,
+}: {
+  completedSessions: SessionOption[];
+}) {
+  const [pacing, setPacing] = useState<ScriptSlot>({ name: null, b64: null });
   const [assignment, setAssignment] = useState<ScriptSlot>({ name: null, b64: null });
-  const pacingRef     = useRef<HTMLInputElement>(null);
+  const pacingRef = useRef<HTMLInputElement>(null);
   const assignmentRef = useRef<HTMLInputElement>(null);
 
-  const [jsonText,          setJsonText]          = useState("");
-  const [jsonSaveError,     setJsonSaveError]     = useState(false);
-  const [isLoadingSession,  setIsLoadingSession]  = useState(false);
-  const jsonInputRef = useRef<HTMLInputElement>(null);
+  const [testCases, setTestCases] = useState<TestCase[]>([]);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  const [isRunning,    setIsRunning]    = useState(false);
-  const [results,      setResults]      = useState<RunResults | null>(null);
-  const [activeResult, setActiveResult] = useState<"pacing" | "assignment">("pacing");
-  const [showModal,    setShowModal]    = useState(false);
+  const [isRunning, setIsRunning] = useState(false);
+  const [runProgress, setRunProgress] = useState<{ done: number; total: number } | null>(null);
+  const [sessionResults, setSessionResults] = useState<SessionRunResult[]>([]);
+  const [activeSessionIdx, setActiveSessionIdx] = useState(0);
+  const [activeResultType, setActiveResultType] = useState<"pacing" | "assignment">("pacing");
+  const [showModal, setShowModal] = useState(false);
 
-  // ── Load persisted state ──────────────────────────────────────────────────
+  // Load persisted scripts + test cases
   useEffect(() => {
     const pn = localStorage.getItem(LS_KEYS.pacingName);
     const pb = localStorage.getItem(LS_KEYS.pacingB64);
@@ -424,110 +628,16 @@ export default function ScriptTester({ completedSessions }: { completedSessions:
     const ab = localStorage.getItem(LS_KEYS.assignmentB64);
     if (an && ab) setAssignment({ name: an, b64: ab });
 
-    const savedJson = localStorage.getItem(LS_KEYS.json);
-    if (savedJson) setJsonText(savedJson);
+    setTestCases(loadTestCases());
   }, []);
 
-  useEffect(() => {
-    if (!jsonText) return;
-    try {
-      localStorage.setItem(LS_KEYS.json, jsonText);
-      setJsonSaveError(false);
-    } catch {
-      setJsonSaveError(true);
-    }
-  }, [jsonText]);
-
-  // ── Pacing accuracy metrics ───────────────────────────────────────────────
-  const { pacingMatches, csvAnnotations } = useMemo<{
-    pacingMatches: PacingMatchRow[];
-    csvAnnotations: CsvAnnotations;
-  }>(() => {
-    if (!results?.pacing || !jsonText) return { pacingMatches: [], csvAnnotations: {} };
-    try {
-      const sessionData = JSON.parse(jsonText);
-      const sessionId   = sessionData?.session_id as string | undefined;
-      if (!sessionId) return { pacingMatches: [], csvAnnotations: {} };
-
-      const pacingRaw = localStorage.getItem(`omnigolf-group-pacing-v1-${sessionId}`);
-      if (!pacingRaw) return { pacingMatches: [], csvAnnotations: {} };
-      const storedRows: StoredPacingRow[] = JSON.parse(pacingRaw);
-
-      const groupIdToLabel = new Map<string, string>(
-        (sessionData.groups ?? []).map((g: any) => [g.group_id as string, g.label as string])
-      );
-
-      const csvMap = new Map<string, string>(
-        (results.pacing.csvFiles ?? []).map((f) => [f.name, f.content])
-      );
-
-      const matches: PacingMatchRow[]  = [];
-      const annotations: CsvAnnotations = {};
-
-      const addAnnotation = (filename: string, ts: string, ann: RowAnnotation) => {
-        if (!annotations[filename]) annotations[filename] = {};
-        if (!annotations[filename][ts]) annotations[filename][ts] = [];
-        annotations[filename][ts].push(ann);
-      };
-
-      for (const row of storedRows) {
-        if (row.eventType !== "hole") continue;
-        if (!row.landmark?.startsWith("hole:")) continue;
-        const holeNumber = parseInt(row.landmark.split(":")[1], 10);
-        if (isNaN(holeNumber)) continue;
-
-        const groupLabel = row.groupId ? (groupIdToLabel.get(row.groupId) ?? null) : null;
-        if (!groupLabel) continue;
-
-        const csvFilename = groupLabelToFilename(groupLabel);
-        const csvContent  = csvMap.get(csvFilename) ?? null;
-
-        let predictedStart: string | null = null;
-        let predictedEnd:   string | null = null;
-
-        if (csvContent) {
-          const { headers, rows: csvRows } = parseCSV(csvContent);
-          const tsCol = headers.indexOf("timestamp");
-          const phCol = headers.indexOf("predicted_hole");
-          if (tsCol !== -1 && phCol !== -1) {
-            const holeRows = csvRows.filter((r) => r[phCol] === String(holeNumber));
-            if (holeRows.length > 0) {
-              predictedStart = holeRows[0][tsCol];
-              predictedEnd   = holeRows[holeRows.length - 1][tsCol];
-            }
-          }
-        }
-
-        const startDelta = row.startTime && predictedStart ? absDiffMin(row.startTime, predictedStart) : null;
-        const endDelta   = row.endTime   && predictedEnd   ? absDiffMin(row.endTime,   predictedEnd)   : null;
-        const startMatch = startDelta !== null ? startDelta <= MATCH_THRESHOLD_MIN : null;
-        const endMatch   = endDelta   !== null ? endDelta   <= MATCH_THRESHOLD_MIN : null;
-
-        matches.push({
-          groupLabel, csvFilename, holeNumber,
-          actualStart: row.startTime || "",
-          actualEnd:   row.endTime   || "",
-          predictedStart, predictedEnd,
-          startDeltaMin: startDelta, endDeltaMin: endDelta,
-          startMatch, endMatch,
-        });
-
-        if (predictedStart) {
-          addAnnotation(csvFilename, predictedStart, { label: `Hole ${holeNumber} start`, match: startMatch ?? false });
-        }
-        if (predictedEnd && predictedEnd !== predictedStart) {
-          addAnnotation(csvFilename, predictedEnd, { label: `Hole ${holeNumber} end`, match: endMatch ?? false });
-        }
-      }
-
-      return { pacingMatches: matches, csvAnnotations: annotations };
-    } catch {
-      return { pacingMatches: [], csvAnnotations: {} };
-    }
-  }, [results, jsonText]);
-
   // ── Script upload helpers ─────────────────────────────────────────────────
-  function makeUploadHandler(setter: (s: ScriptSlot) => void, nameKey: string, b64Key: string) {
+
+  function makeUploadHandler(
+    setter: (s: ScriptSlot) => void,
+    nameKey: string,
+    b64Key: string
+  ) {
     return (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (!file) return;
@@ -542,7 +652,12 @@ export default function ScriptTester({ completedSessions }: { completedSessions:
     };
   }
 
-  function makeClearHandler(setter: (s: ScriptSlot) => void, nameKey: string, b64Key: string, ref: React.RefObject<HTMLInputElement | null>) {
+  function makeClearHandler(
+    setter: (s: ScriptSlot) => void,
+    nameKey: string,
+    b64Key: string,
+    ref: React.RefObject<HTMLInputElement | null>
+  ) {
     return () => {
       setter({ name: null, b64: null });
       localStorage.removeItem(nameKey);
@@ -551,61 +666,164 @@ export default function ScriptTester({ completedSessions }: { completedSessions:
     };
   }
 
-  async function loadSession(sessionId: string) {
-    if (!sessionId) return;
-    setIsLoadingSession(true);
-    try {
-      const res = await fetch(`/api/sessions/${sessionId}/export`);
-      if (!res.ok) throw new Error(`Export failed: ${res.status}`);
-      setJsonText(JSON.stringify(await res.json(), null, 2));
-    } catch (err: any) {
-      window.alert(`Failed to load session: ${err?.message ?? "unknown error"}`);
-    } finally {
-      setIsLoadingSession(false);
-    }
-  }
-
-  function handleJsonUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => setJsonText(reader.result as string);
-    reader.readAsText(file);
-  }
-
   function toFile(slot: ScriptSlot): File {
     const bytes = Uint8Array.from(atob(slot.b64!), (c) => c.charCodeAt(0));
     return new File([bytes], slot.name!, { type: "text/plain" });
   }
 
-  async function handleRun() {
-    if (!jsonText.trim() || (!pacing.b64 && !assignment.b64)) return;
-    setIsRunning(true);
-    setResults(null);
-    try {
-      const fd = new FormData();
-      fd.append("json", jsonText.trim());
-      if (pacing.b64)     fd.append("script_pacing",    toFile(pacing));
-      if (assignment.b64) fd.append("script_assignment", toFile(assignment));
+  // ── Session selection ─────────────────────────────────────────────────────
 
-      const res  = await fetch("/api/run-script", { method: "POST", body: fd });
-      const data = await res.json() as RunResults;
-      setResults(data);
-      setActiveResult(data.pacing ? "pacing" : "assignment");
-      setShowModal(true);
-    } catch (err: any) {
-      const errResult = { csvFiles: [], stdout: "", stderr: "", error: err?.message ?? "Request failed" };
-      setResults({
-        pacing:     pacing.b64     ? errResult : null,
-        assignment: assignment.b64 ? errResult : null,
-      });
-      setShowModal(true);
-    } finally {
-      setIsRunning(false);
-    }
+  function toggleId(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   }
 
-  const canRun = !!jsonText.trim() && (!!pacing.b64 || !!assignment.b64) && !isRunning;
+  // ── Run ───────────────────────────────────────────────────────────────────
+
+  async function runScriptForJson(
+    jsonStr: string
+  ): Promise<{ pacing: ScriptResult; assignment: ScriptResult }> {
+    const fd = new FormData();
+    fd.append("json", jsonStr);
+    if (pacing.b64) fd.append("script_pacing", toFile(pacing));
+    if (assignment.b64) fd.append("script_assignment", toFile(assignment));
+
+    const res = await fetch("/api/run-script", { method: "POST", body: fd });
+    return res.json();
+  }
+
+  async function handleRun() {
+    if (selectedIds.size === 0 || (!pacing.b64 && !assignment.b64)) return;
+
+    setIsRunning(true);
+    setRunProgress({ done: 0, total: selectedIds.size });
+    setSessionResults([]);
+
+    const results: SessionRunResult[] = [];
+
+    // Resolve each selected ID to a {name, json, pacingRows}
+    const queue: Array<{
+      id: string;
+      name: string;
+      isTestCase: boolean;
+      jsonStr: string | null;
+      pacingRows: StoredPacingRow[];
+    }> = [];
+
+    for (const id of selectedIds) {
+      const tc = testCases.find((t) => t.id === id);
+      if (tc) {
+        queue.push({
+          id,
+          name: tc.name,
+          isTestCase: true,
+          jsonStr: JSON.stringify(testCaseToExportJson(tc), null, 2),
+          pacingRows: tc.pacingRows as unknown as StoredPacingRow[],
+        });
+      } else {
+        const session = completedSessions.find((s) => s.id === id);
+        if (!session) continue;
+        // Fetch the export JSON
+        try {
+          const res = await fetch(`/api/sessions/${id}/export`);
+          const data = await res.json();
+          const jsonStr = JSON.stringify(data, null, 2);
+          // Get pacing rows from localStorage
+          let pacingRows: StoredPacingRow[] = [];
+          try {
+            pacingRows = JSON.parse(
+              localStorage.getItem(`omnigolf-group-pacing-v1-${id}`) ?? "[]"
+            );
+          } catch {
+            /* ignore */
+          }
+          queue.push({
+            id,
+            name: session.name,
+            isTestCase: false,
+            jsonStr,
+            pacingRows,
+          });
+        } catch {
+          const errResult: ScriptResult = {
+            csvFiles: [],
+            stdout: "",
+            stderr: "",
+            error: "Failed to load session export",
+          };
+          results.push({
+            sessionId: id,
+            sessionName: session.name,
+            isTestCase: false,
+            pacing: pacing.b64 ? errResult : null,
+            assignment: assignment.b64 ? errResult : null,
+            pacingMatches: [],
+            csvAnnotations: {},
+          });
+          setRunProgress((p) => p && { ...p, done: p.done + 1 });
+          continue;
+        }
+      }
+    }
+
+    // Run scripts sequentially to avoid server overload
+    for (const item of queue) {
+      try {
+        const { pacing: pr, assignment: ar } = await runScriptForJson(item.jsonStr!);
+        const sessionData = JSON.parse(item.jsonStr!);
+        const { pacingMatches, csvAnnotations } = computePacingMetrics(
+          item.pacingRows,
+          pr,
+          sessionData
+        );
+        results.push({
+          sessionId: item.id,
+          sessionName: item.name,
+          isTestCase: item.isTestCase,
+          pacing: pr,
+          assignment: ar,
+          pacingMatches,
+          csvAnnotations,
+        });
+      } catch (err: any) {
+        const errResult: ScriptResult = {
+          csvFiles: [],
+          stdout: "",
+          stderr: "",
+          error: err?.message ?? "Request failed",
+        };
+        results.push({
+          sessionId: item.id,
+          sessionName: item.name,
+          isTestCase: item.isTestCase,
+          pacing: pacing.b64 ? errResult : null,
+          assignment: assignment.b64 ? errResult : null,
+          pacingMatches: [],
+          csvAnnotations: {},
+        });
+      }
+      setRunProgress((p) => p && { ...p, done: p.done + 1 });
+    }
+
+    setSessionResults(results);
+    setActiveSessionIdx(0);
+    // Default active result type to first available
+    if (results[0]) {
+      setActiveResultType(results[0].pacing ? "pacing" : "assignment");
+    }
+    setIsRunning(false);
+    setRunProgress(null);
+    setShowModal(true);
+  }
+
+  const canRun =
+    selectedIds.size > 0 && (!!pacing.b64 || !!assignment.b64) && !isRunning;
+
+  const activeResult = sessionResults[activeSessionIdx];
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -615,115 +833,242 @@ export default function ScriptTester({ completedSessions }: { completedSessions:
         <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
           <div className="mb-4">
             <h2 className="text-sm font-semibold text-zinc-900">Scripts</h2>
-            <p className="mt-1 text-xs text-zinc-500">Upload one or both scripts. Each is saved in your browser.</p>
+            <p className="mt-1 text-xs text-zinc-500">
+              Upload one or both scripts. Each is saved in your browser.
+            </p>
           </div>
           <div className="space-y-4">
-            <ScriptUploadSlot label="Group Pacing" slot={pacing} inputRef={pacingRef}
+            <ScriptUploadSlot
+              label="Group Pacing"
+              slot={pacing}
+              inputRef={pacingRef}
               onUpload={makeUploadHandler(setPacing, LS_KEYS.pacingName, LS_KEYS.pacingB64)}
-              onClear={makeClearHandler(setPacing, LS_KEYS.pacingName, LS_KEYS.pacingB64, pacingRef)} />
-            <ScriptUploadSlot label="Group Assignments" slot={assignment} inputRef={assignmentRef}
-              onUpload={makeUploadHandler(setAssignment, LS_KEYS.assignmentName, LS_KEYS.assignmentB64)}
-              onClear={makeClearHandler(setAssignment, LS_KEYS.assignmentName, LS_KEYS.assignmentB64, assignmentRef)} />
+              onClear={makeClearHandler(
+                setPacing,
+                LS_KEYS.pacingName,
+                LS_KEYS.pacingB64,
+                pacingRef
+              )}
+            />
+            <ScriptUploadSlot
+              label="Group Assignments"
+              slot={assignment}
+              inputRef={assignmentRef}
+              onUpload={makeUploadHandler(
+                setAssignment,
+                LS_KEYS.assignmentName,
+                LS_KEYS.assignmentB64
+              )}
+              onClear={makeClearHandler(
+                setAssignment,
+                LS_KEYS.assignmentName,
+                LS_KEYS.assignmentB64,
+                assignmentRef
+              )}
+            />
           </div>
         </div>
 
-        {/* Session JSON card */}
+        {/* Sessions card */}
         <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
-          <div className="mb-3">
-            <h2 className="text-sm font-semibold text-zinc-900">Session JSON</h2>
-            <p className="mt-1 text-xs text-zinc-500">Choose a completed session or upload a JSON file.</p>
+          <div className="mb-3 flex items-center justify-between">
+            <div>
+              <h2 className="text-sm font-semibold text-zinc-900">Sessions</h2>
+              <p className="mt-1 text-xs text-zinc-500">
+                Select one or more sessions to run scripts against.
+              </p>
+            </div>
+            {selectedIds.size > 0 && (
+              <span className="rounded-full bg-zinc-900 px-2 py-0.5 text-xs font-medium text-white">
+                {selectedIds.size} selected
+              </span>
+            )}
           </div>
-          <div className="space-y-2">
-            <select defaultValue="" onChange={(e) => loadSession(e.target.value)} disabled={isLoadingSession}
-              className={inputClass + " w-full"}>
-              <option value="">Select a completed session…</option>
-              {completedSessions.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}{s.courseName ? ` — ${s.courseName}` : ""}{s.sessionDate ? ` (${s.sessionDate})` : ""}
-                </option>
-              ))}
-            </select>
-            <button type="button" onClick={() => jsonInputRef.current?.click()} disabled={isLoadingSession}
-              className="w-full rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-4 py-3 text-center text-sm text-zinc-500 hover:bg-zinc-100 disabled:opacity-50">
-              {jsonText ? "Replace with uploaded file" : "Or upload a .json file"}
-            </button>
-          </div>
-          {jsonText && !isLoadingSession && (() => {
-            let sessionName: string | null = null;
-            try { sessionName = JSON.parse(jsonText)?.session_name ?? null; } catch { /* ignore */ }
-            return (
-              <div className="mt-2 space-y-1">
-                <p className="text-xs text-zinc-500">
-                  ✓ {sessionName ? <><span className="font-medium text-zinc-700">{sessionName}</span> loaded</> : "JSON loaded"}
+
+          <div className="max-h-72 space-y-4 overflow-y-auto pr-1">
+            {/* Completed sessions */}
+            {completedSessions.length > 0 && (
+              <div>
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                  Completed Sessions
                 </p>
-                {jsonSaveError && (
-                  <p className="text-xs text-amber-600">⚠ JSON too large to persist — you may need to reload it next visit.</p>
-                )}
+                <div className="space-y-1">
+                  {completedSessions.map((s) => (
+                    <label
+                      key={s.id}
+                      className="flex cursor-pointer items-center gap-3 rounded-lg border border-zinc-200 px-3 py-2 hover:bg-zinc-50"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(s.id)}
+                        onChange={() => toggleId(s.id)}
+                        className="h-4 w-4 rounded border-zinc-300 accent-zinc-900"
+                      />
+                      <div className="min-w-0">
+                        <div className="truncate text-sm text-zinc-900">{s.name}</div>
+                        {(s.courseName || s.sessionDate) && (
+                          <div className="truncate text-xs text-zinc-500">
+                            {[s.courseName, s.sessionDate].filter(Boolean).join(" · ")}
+                          </div>
+                        )}
+                      </div>
+                    </label>
+                  ))}
+                </div>
               </div>
-            );
-          })()}
-          {isLoadingSession && <p className="mt-2 text-xs text-zinc-500">Loading…</p>}
-          <input ref={jsonInputRef} type="file" accept=".json" className="hidden" onChange={handleJsonUpload} />
+            )}
+
+            {/* Test cases */}
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                Test Cases
+              </p>
+              {testCases.length === 0 ? (
+                <p className="text-xs text-zinc-400">
+                  No test cases yet. Create one in the Test Cases tab.
+                </p>
+              ) : (
+                <div className="space-y-1">
+                  {testCases.map((tc) => (
+                    <label
+                      key={tc.id}
+                      className="flex cursor-pointer items-center gap-3 rounded-lg border border-zinc-200 px-3 py-2 hover:bg-zinc-50"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(tc.id)}
+                        onChange={() => toggleId(tc.id)}
+                        className="h-4 w-4 rounded border-zinc-300 accent-zinc-900"
+                      />
+                      <div className="min-w-0">
+                        <div className="truncate text-sm text-zinc-900">
+                          {tc.name || "Untitled"}
+                        </div>
+                        {tc.courseName && (
+                          <div className="truncate text-xs text-zinc-500">{tc.courseName}</div>
+                        )}
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       </div>
 
       {/* Run button */}
-      <div>
-        <button type="button" onClick={handleRun} disabled={!canRun}
-          className="rounded-lg bg-zinc-900 px-5 py-2 text-sm font-medium text-white shadow-sm hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50">
-          {isRunning ? "Running…" : "Run Script"}
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={handleRun}
+          disabled={!canRun}
+          className="rounded-lg bg-zinc-900 px-5 py-2 text-sm font-medium text-white shadow-sm hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {isRunning
+            ? runProgress
+              ? `Running… (${runProgress.done}/${runProgress.total})`
+              : "Running…"
+            : selectedIds.size > 1
+            ? `Run Script (${selectedIds.size} sessions)`
+            : "Run Script"}
         </button>
       </div>
 
       {/* View Results button */}
-      {results && (
-        <button type="button" onClick={() => setShowModal(true)}
-          className="rounded-lg border border-zinc-200 bg-white px-4 py-2 text-sm font-medium text-zinc-800 shadow-sm hover:bg-zinc-50">
+      {sessionResults.length > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowModal(true)}
+          className="rounded-lg border border-zinc-200 bg-white px-4 py-2 text-sm font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
+        >
           View Results
         </button>
       )}
 
       {/* Results modal */}
-      {showModal && results && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-          onClick={(e) => { if (e.target === e.currentTarget) setShowModal(false); }}>
+      {showModal && sessionResults.length > 0 && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowModal(false);
+          }}
+        >
           <div className="flex h-[90vh] w-full max-w-6xl flex-col rounded-2xl border border-zinc-200 bg-zinc-50 shadow-xl">
             {/* Modal header */}
             <div className="flex shrink-0 items-center justify-between border-b border-zinc-200 px-6 py-4">
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-3">
                 <h2 className="text-sm font-semibold text-zinc-900">Results</h2>
-                {results.pacing && results.assignment && (
-                  <div className="flex gap-2">
-                    {(["pacing", "assignment"] as const).map((key) => (
-                      <button key={key} type="button" onClick={() => setActiveResult(key)}
+
+                {/* Session tabs (if multiple) */}
+                {sessionResults.length > 1 && (
+                  <div className="flex flex-wrap gap-1">
+                    {sessionResults.map((r, i) => (
+                      <button
+                        key={r.sessionId}
+                        type="button"
+                        onClick={() => {
+                          setActiveSessionIdx(i);
+                          setActiveResultType(
+                            sessionResults[i].pacing ? "pacing" : "assignment"
+                          );
+                        }}
                         className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-                          activeResult === key
+                          activeSessionIdx === i
                             ? "bg-zinc-900 text-white shadow-sm"
                             : "border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50"
-                        }`}>
+                        }`}
+                      >
+                        {r.sessionName}
+                        {r.isTestCase && (
+                          <span className="ml-1 opacity-60">(test)</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* Pacing / Assignment toggle */}
+                {activeResult?.pacing && activeResult?.assignment && (
+                  <div className="flex gap-2">
+                    {(["pacing", "assignment"] as const).map((key) => (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => setActiveResultType(key)}
+                        className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                          activeResultType === key
+                            ? "bg-zinc-900 text-white shadow-sm"
+                            : "border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50"
+                        }`}
+                      >
                         {key === "pacing" ? "Group Pacing" : "Group Assignments"}
                       </button>
                     ))}
                   </div>
                 )}
               </div>
-              <button type="button" onClick={() => setShowModal(false)}
-                className="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50">
+
+              <button
+                type="button"
+                onClick={() => setShowModal(false)}
+                className="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+              >
                 Close
               </button>
             </div>
 
             {/* Modal body */}
             <div className="min-h-0 flex-1 overflow-y-auto p-6">
-              {activeResult === "pacing" && results.pacing && (
+              {activeResult && activeResultType === "pacing" && activeResult.pacing && (
                 <PacingScriptResultPanel
-                  result={results.pacing}
-                  pacingMatches={pacingMatches}
-                  csvAnnotations={csvAnnotations}
+                  result={activeResult.pacing}
+                  pacingMatches={activeResult.pacingMatches}
+                  csvAnnotations={activeResult.csvAnnotations}
                 />
               )}
-              {activeResult === "assignment" && (
-                <ScriptResultPanel result={results.assignment} />
+              {activeResult && activeResultType === "assignment" && (
+                <ScriptResultPanel result={activeResult.assignment} />
               )}
             </div>
           </div>

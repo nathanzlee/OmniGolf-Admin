@@ -9,7 +9,7 @@ export default async function SessionsPage() {
   return (
     <main className="min-h-screen bg-zinc-50">
       {/* Side nav — fixed to left side of screen */}
-      <div className="fixed left-4 top-24 z-10">
+      <div className="fixed left-16 top-24 z-10">
         <SessionSubnav />
       </div>
 

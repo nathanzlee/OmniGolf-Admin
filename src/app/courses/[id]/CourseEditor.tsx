@@ -10,6 +10,7 @@ import {
 } from "../../actions";
 import { useRouter } from "next/navigation";
 import AdminNav from "@/components/AdminNav";
+import CourseSubnav from "../CourseSubnav";
 
 type Course = { id: string; name: string; created_at: string };
 
@@ -390,6 +391,7 @@ export default function CourseEditor({
 
   return (
     <main className="min-h-screen bg-zinc-50">
+      <div className="fixed left-16 top-24 z-10"><CourseSubnav /></div>
       <div className="mx-auto max-w-6xl px-6 py-8">
         <AdminNav current="courses" />
 

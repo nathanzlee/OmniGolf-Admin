@@ -1,5 +1,6 @@
 import AdminNav from "@/components/AdminNav";
 import ScriptTester from "./ScriptTester";
+import ScriptTestingSubnav from "./ScriptTestingSubnav";
 import { listSessions } from "../actions";
 
 export default async function ScriptTestingPage() {
@@ -18,12 +19,15 @@ export default async function ScriptTestingPage() {
 
   return (
     <main className="min-h-screen bg-zinc-50">
+      <div className="fixed left-16 top-24 z-10">
+        <ScriptTestingSubnav />
+      </div>
       <div className="mx-auto max-w-6xl px-6 py-8">
         <AdminNav current="script-testing" />
         <div className="mb-6">
           <h1 className="text-xl font-semibold text-zinc-900">Script Testing</h1>
           <p className="mt-1 text-sm text-zinc-600">
-            Upload your group pacing Python script and a session JSON file to view the output.
+            Upload your Python scripts and select sessions to run them against.
           </p>
         </div>
         <ScriptTester completedSessions={completedSessions} />
