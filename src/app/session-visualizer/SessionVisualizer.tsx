@@ -27,7 +27,9 @@ type Group = {
   group_id: string;
   label?: string | null;
   tee_time?: string | null;
-  player_user_ids: string[];
+  players?: { user_id: string; using_carts: boolean }[];
+  /** @deprecated use players */
+  player_user_ids?: string[];
 };
 
 type PlayerLocation = {
@@ -289,11 +291,12 @@ export default function SessionVisualizer({ completedSessions }: { completedSess
     if (!data) return map;
 
     for (const group of data.groups) {
-      for (const playerUserId of group.player_user_ids) {
+      const playerIds = group.players?.map((p) => p.user_id) ?? group.player_user_ids ?? [];
+      for (const playerUserId of playerIds) {
         map.set(playerUserId, {
           groupId: group.group_id,
           groupLabel: group.label ?? null,
-          playerCount: group.player_user_ids.length,
+          playerCount: playerIds.length,
         });
       }
     }
@@ -331,7 +334,7 @@ export default function SessionVisualizer({ completedSessions }: { completedSess
     return data.groups
       .map((group) => {
         const playersInGroup = playerPins.filter((pin) =>
-          group.player_user_ids.includes(pin.userId)
+          playerIds.includes(pin.userId)
         );
 
         if (playersInGroup.length === 0) return null;
