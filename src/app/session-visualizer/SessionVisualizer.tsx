@@ -333,8 +333,9 @@ export default function SessionVisualizer({ completedSessions }: { completedSess
 
     return data.groups
       .map((group) => {
+        const groupPlayerIds = group.players?.map((p) => p.user_id) ?? group.player_user_ids ?? [];
         const playersInGroup = playerPins.filter((pin) =>
-          playerIds.includes(pin.userId)
+          groupPlayerIds.includes(pin.userId)
         );
 
         if (playersInGroup.length === 0) return null;
