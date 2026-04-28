@@ -49,6 +49,44 @@ export async function GET(
       return new NextResponse(holesError.message, { status: 500 });
     }
 
+    // Fetch cart paths through the parent course_hole_cart_paths table
+    const { data: cartPathData, error: cartPathsError } = await supabase
+      .from("course_hole_cart_paths")
+      .select(`
+        id,
+        label,
+        path_type,
+        course_holes!inner(hole_number),
+        course_hole_cart_path_points(seq, latitude, longitude)
+      `)
+      .eq("course_id", session.course_id)
+      .order("seq", { referencedTable: "course_hole_cart_path_points", ascending: true });
+
+    if (cartPathsError) {
+      return new NextResponse(cartPathsError.message, { status: 500 });
+    }
+
+    // Build a map: holeNumber -> [{label, path_type, coordinates}]
+    const cartPathsByHole = new Map<number, { label: string | null; path_type: string; coordinates: { lat: number; lng: number }[] }[]>();
+    for (const cp of cartPathData ?? []) {
+      const courseHoles = Array.isArray((cp as any).course_holes)
+        ? (cp as any).course_holes[0]
+        : (cp as any).course_holes;
+      const holeNumber = courseHoles?.hole_number as number;
+      if (!holeNumber) continue;
+
+      const coordinates = [...((cp as any).course_hole_cart_path_points ?? [])]
+        .sort((a: any, b: any) => a.seq - b.seq)
+        .map((p: any) => ({ lat: p.latitude as number, lng: p.longitude as number }));
+
+      if (!cartPathsByHole.has(holeNumber)) cartPathsByHole.set(holeNumber, []);
+      cartPathsByHole.get(holeNumber)!.push({
+        label: (cp as any).label ?? null,
+        path_type: (cp as any).path_type ?? "cart_path",
+        coordinates,
+      });
+    }
+
     const { data: landmarks, error: landmarksError } = await supabase
       .from("course_landmarks")
       .select("id, landmark_type, latitude, longitude, endpoint1_latitude, endpoint1_longitude, endpoint2_latitude, endpoint2_longitude")
@@ -76,7 +114,7 @@ export async function GET(
         ? { data: [], error: null }
         : await supabase
             .from("group_players")
-            .select("group_id, user_id")
+            .select("group_id, user_id, using_carts")
             .in("group_id", groupIds);
 
     if (groupPlayersError) {
@@ -103,6 +141,10 @@ export async function GET(
       (users ?? []).map((u: any) => [u.id, u.email])
     );
 
+    const usingCartsByUserId = new Map<string, boolean>(
+      (groupPlayers ?? []).map((gp: any) => [gp.user_id, gp.using_carts ?? false])
+    );
+
     const { data: locations, error: locationsError } = await supabase
       .from("session_locations")
       .select(
@@ -119,9 +161,9 @@ export async function GET(
       group_id: group.id,
       label: group.label,
       tee_time: group.tee_time,
-      player_user_ids: (groupPlayers ?? [])
+      players: (groupPlayers ?? [])
         .filter((gp: any) => gp.group_id === group.id)
-        .map((gp: any) => gp.user_id),
+        .map((gp: any) => ({ user_id: gp.user_id, using_carts: gp.using_carts ?? false })),
     }));
 
     const playerIds = Array.from(
@@ -131,6 +173,7 @@ export async function GET(
     const playersJson = playerIds.map((userId) => ({
       user_id: userId,
       email: usersById.get(userId) ?? null,
+      using_carts: usingCartsByUserId.get(userId) ?? false,
       locations: (locations ?? [])
         .filter((row: any) => row.user_id === userId)
         .map((row: any) => ({
@@ -156,6 +199,7 @@ export async function GET(
         green_lat: h.green_lat,
         green_lng: h.green_lng,
         allotted_time: h.allotted_time,
+        cart_paths: cartPathsByHole.get(h.hole_number) ?? [],
       })),
       course_landmarks: (landmarks ?? []).map((l: any) => {
         if (l.landmark_type === "driving_range") {

@@ -773,8 +773,13 @@ export default function ScriptTester({
     // Run scripts sequentially to avoid server overload
     for (const item of queue) {
       try {
-        const { pacing: pr, assignment: ar } = await runScriptForJson(item.jsonStr!);
-        const sessionData = JSON.parse(item.jsonStr!);
+        // Normalize Z-suffix ISO timestamps → +00:00 for Python < 3.11 datetime.fromisoformat()
+        const normalizedJson = item.jsonStr!.replace(
+          /"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?)Z"/g,
+          '"$1+00:00"'
+        );
+        const { pacing: pr, assignment: ar } = await runScriptForJson(normalizedJson);
+        const sessionData = JSON.parse(normalizedJson);
         const { pacingMatches, csvAnnotations } = computePacingMetrics(
           item.pacingRows,
           pr,

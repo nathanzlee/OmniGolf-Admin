@@ -26,7 +26,7 @@ type GroupRow = {
   localId: string;
   label: string;
   teeTime: string;
-  playerUserIds: string[];
+  players: { userId: string; usingCarts: boolean }[];
 };
 
 type PacingEventType = "hole" | "off course";
@@ -124,9 +124,9 @@ function buildInitialGroups(
     localId: g.id,
     label: g.label ?? "",
     teeTime: formatForDatetimeLocal(g.tee_time),
-    playerUserIds: groupPlayers
+    players: groupPlayers
       .filter((p) => p.group_id === g.id)
-      .map((p) => p.user_id),
+      .map((p) => ({ userId: p.user_id, usingCarts: p.using_carts })),
   }));
 }
 
@@ -375,7 +375,7 @@ export default function SessionEditor({
   );
 
   const assignedUserIds = useMemo(
-    () => new Set(groups.flatMap((g) => g.playerUserIds)),
+    () => new Set(groups.flatMap((g) => g.players.map((p) => p.userId))),
     [groups]
   );
 
@@ -388,7 +388,7 @@ export default function SessionEditor({
   function addGroup() {
     setGroups((prev) => [
       ...prev,
-      { localId: makeLocalId(), label: "", teeTime: "", playerUserIds: [] },
+      { localId: makeLocalId(), label: "", teeTime: "", players: [] },
     ]);
   }
 
@@ -407,12 +407,12 @@ export default function SessionEditor({
     setGroups((prev) =>
       prev.map((g) => ({
         ...g,
-        playerUserIds:
+        players:
           g.localId === localId
-            ? g.playerUserIds.includes(userId)
-              ? g.playerUserIds
-              : [...g.playerUserIds, userId]
-            : g.playerUserIds.filter((id) => id !== userId),
+            ? g.players.some((p) => p.userId === userId)
+              ? g.players
+              : [...g.players, { userId, usingCarts: false }]
+            : g.players.filter((p) => p.userId !== userId),
       }))
     );
   }
@@ -421,7 +421,22 @@ export default function SessionEditor({
     setGroups((prev) =>
       prev.map((g) =>
         g.localId === localId
-          ? { ...g, playerUserIds: g.playerUserIds.filter((id) => id !== userId) }
+          ? { ...g, players: g.players.filter((p) => p.userId !== userId) }
+          : g
+      )
+    );
+  }
+
+  function togglePlayerUsingCarts(userId: string, localId: string) {
+    setGroups((prev) =>
+      prev.map((g) =>
+        g.localId === localId
+          ? {
+              ...g,
+              players: g.players.map((p) =>
+                p.userId === userId ? { ...p, usingCarts: !p.usingCarts } : p
+              ),
+            }
           : g
       )
     );
@@ -435,7 +450,7 @@ export default function SessionEditor({
       id: uuidPattern.test(g.localId) ? g.localId : undefined,
       label: g.label.trim() || undefined,
       teeTime: g.teeTime ? new Date(g.teeTime).toISOString() : undefined,
-      playerUserIds: g.playerUserIds,
+      players: g.players,
     }));
   }
 
@@ -698,7 +713,7 @@ export default function SessionEditor({
                           .filter(
                             (user) =>
                               !assignedUserIds.has(user.id) ||
-                              group.playerUserIds.includes(user.id)
+                              group.players.some((p) => p.userId === user.id)
                           )
                           .map((user) => (
                             <option key={user.id} value={user.id}>
@@ -709,10 +724,10 @@ export default function SessionEditor({
                     </div>
 
                     <div className="space-y-2">
-                      {group.playerUserIds.length === 0 ? (
+                      {group.players.length === 0 ? (
                         <div className="text-xs text-zinc-500">No players assigned yet.</div>
                       ) : (
-                        group.playerUserIds.map((userId) => (
+                        group.players.map(({ userId, usingCarts }) => (
                           <div
                             key={userId}
                             className="flex items-center justify-between rounded-lg border border-zinc-200 bg-white px-3 py-2"
@@ -720,13 +735,24 @@ export default function SessionEditor({
                             <div className="text-sm text-zinc-900">
                               {usersById.get(userId)?.label ?? userId}
                             </div>
-                            <button
-                              type="button"
-                              onClick={() => unassignPlayerFromGroup(userId, group.localId)}
-                              className="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs text-zinc-800 hover:bg-zinc-50"
-                            >
-                              Remove
-                            </button>
+                            <div className="flex items-center gap-3">
+                              <label className="flex cursor-pointer items-center gap-1.5 text-xs text-zinc-600 select-none">
+                                <input
+                                  type="checkbox"
+                                  checked={usingCarts}
+                                  onChange={() => togglePlayerUsingCarts(userId, group.localId)}
+                                  className="h-3.5 w-3.5 rounded border-zinc-300 accent-zinc-900"
+                                />
+                                Using cart
+                              </label>
+                              <button
+                                type="button"
+                                onClick={() => unassignPlayerFromGroup(userId, group.localId)}
+                                className="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs text-zinc-800 hover:bg-zinc-50"
+                              >
+                                Remove
+                              </button>
+                            </div>
                           </div>
                         ))
                       )}

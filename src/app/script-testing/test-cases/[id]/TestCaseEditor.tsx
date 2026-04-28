@@ -118,6 +118,7 @@ export default function TestCaseEditor({
   const jsonInputRef = useRef<HTMLInputElement>(null);
 
   const [name, setName] = useState("New Test Case");
+  const [description, setDescription] = useState("");
   const [sessionJson, setSessionJson] = useState("");
   const [sessionJsonName, setSessionJsonName] = useState<string | null>(null);
   const [courseName, setCourseName] = useState<string | null>(null);
@@ -141,6 +142,7 @@ export default function TestCaseEditor({
     const tc = loadTestCases().find((t) => t.id === id);
     if (tc) {
       setName(tc.name);
+      setDescription(tc.description ?? "");
       setSessionJson(tc.sessionJson ?? "");
       setCourseName(tc.courseName ?? null);
       setGroups(tc.groups);
@@ -316,6 +318,7 @@ export default function TestCaseEditor({
     return {
       id,
       name: name.trim() || "Untitled Test Case",
+      description,
       courseId: null,
       courseName,
       holes,
@@ -402,12 +405,24 @@ export default function TestCaseEditor({
         {sectionsOpen.config && (
           <div className="mb-6 rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
             {/* Name */}
-            <div className="mb-6">
+            <div className="mb-4">
               <label className="mb-2 block text-sm font-medium text-zinc-700">Name</label>
               <input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 className={inputClass + " w-full max-w-sm"}
+              />
+            </div>
+
+            {/* Description */}
+            <div className="mb-6">
+              <label className="mb-2 block text-sm font-medium text-zinc-700">Description</label>
+              <textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="Describe what this test case covers..."
+                rows={3}
+                className={inputClass + " w-full resize-none"}
               />
             </div>
 

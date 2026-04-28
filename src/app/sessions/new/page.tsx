@@ -22,7 +22,7 @@ type GroupRow = {
   localId: string;
   label: string;
   teeTime: string;
-  playerUserIds: string[];
+  players: { userId: string; usingCarts: boolean }[];
 };
 
 const inputClass =
@@ -68,7 +68,7 @@ export default function NewSessionPage() {
   }, []);
 
   const assignedUserIds = useMemo(
-    () => new Set(groups.flatMap((g) => g.playerUserIds)),
+    () => new Set(groups.flatMap((g) => g.players.map((p) => p.userId))),
     [groups]
   );
 
@@ -81,7 +81,7 @@ export default function NewSessionPage() {
   function addGroup() {
     setGroups((prev) => [
       ...prev,
-      { localId: makeLocalId(), label: "", teeTime: "", playerUserIds: [] },
+      { localId: makeLocalId(), label: "", teeTime: "", players: [] },
     ]);
   }
 
@@ -89,11 +89,7 @@ export default function NewSessionPage() {
     setGroups((prev) => prev.filter((g) => g.localId !== localId));
   }
 
-  function updateGroup(
-    localId: string,
-    field: "label" | "teeTime",
-    value: string
-  ) {
+  function updateGroup(localId: string, field: "label" | "teeTime", value: string) {
     setGroups((prev) =>
       prev.map((g) => (g.localId === localId ? { ...g, [field]: value } : g))
     );
@@ -101,16 +97,15 @@ export default function NewSessionPage() {
 
   function assignPlayerToGroup(userId: string, localId: string) {
     if (!userId) return;
-
     setGroups((prev) =>
       prev.map((g) => ({
         ...g,
-        playerUserIds:
+        players:
           g.localId === localId
-            ? g.playerUserIds.includes(userId)
-              ? g.playerUserIds
-              : [...g.playerUserIds, userId]
-            : g.playerUserIds.filter((id) => id !== userId),
+            ? g.players.some((p) => p.userId === userId)
+              ? g.players
+              : [...g.players, { userId, usingCarts: false }]
+            : g.players.filter((p) => p.userId !== userId),
       }))
     );
   }
@@ -119,9 +114,21 @@ export default function NewSessionPage() {
     setGroups((prev) =>
       prev.map((g) =>
         g.localId === localId
+          ? { ...g, players: g.players.filter((p) => p.userId !== userId) }
+          : g
+      )
+    );
+  }
+
+  function togglePlayerUsingCarts(userId: string, localId: string) {
+    setGroups((prev) =>
+      prev.map((g) =>
+        g.localId === localId
           ? {
               ...g,
-              playerUserIds: g.playerUserIds.filter((id) => id !== userId),
+              players: g.players.map((p) =>
+                p.userId === userId ? { ...p, usingCarts: !p.usingCarts } : p
+              ),
             }
           : g
       )
@@ -132,7 +139,7 @@ export default function NewSessionPage() {
     return groups.map((g) => ({
       label: g.label.trim() || undefined,
       teeTime: g.teeTime ? new Date(g.teeTime).toISOString() : undefined,
-      playerUserIds: g.playerUserIds,
+      players: g.players,
     }));
   }
 
@@ -324,7 +331,7 @@ export default function NewSessionPage() {
                         .filter(
                           (user) =>
                             !assignedUserIds.has(user.id) ||
-                            group.playerUserIds.includes(user.id)
+                            group.players.some((p) => p.userId === user.id)
                         )
                         .map((user) => (
                           <option key={user.id} value={user.id}>
@@ -335,12 +342,12 @@ export default function NewSessionPage() {
                   </div>
 
                   <div className="space-y-2">
-                    {group.playerUserIds.length === 0 ? (
+                    {group.players.length === 0 ? (
                       <div className="text-xs text-zinc-500">
                         No players assigned to this group yet.
                       </div>
                     ) : (
-                      group.playerUserIds.map((userId) => (
+                      group.players.map(({ userId, usingCarts }) => (
                         <div
                           key={userId}
                           className="flex items-center justify-between rounded-lg border border-zinc-200 bg-white px-3 py-2"
@@ -348,14 +355,24 @@ export default function NewSessionPage() {
                           <div className="text-sm text-zinc-900">
                             {usersById.get(userId)?.label ?? userId}
                           </div>
-
-                          <button
-                            type="button"
-                            onClick={() => unassignPlayerFromGroup(userId, group.localId)}
-                            className="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs text-zinc-800 hover:bg-zinc-50"
-                          >
-                            Remove
-                          </button>
+                          <div className="flex items-center gap-3">
+                            <label className="flex cursor-pointer items-center gap-1.5 text-xs text-zinc-600 select-none">
+                              <input
+                                type="checkbox"
+                                checked={usingCarts}
+                                onChange={() => togglePlayerUsingCarts(userId, group.localId)}
+                                className="h-3.5 w-3.5 rounded border-zinc-300 accent-zinc-900"
+                              />
+                              Using cart
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => unassignPlayerFromGroup(userId, group.localId)}
+                              className="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs text-zinc-800 hover:bg-zinc-50"
+                            >
+                              Remove
+                            </button>
+                          </div>
                         </div>
                       ))
                     )}

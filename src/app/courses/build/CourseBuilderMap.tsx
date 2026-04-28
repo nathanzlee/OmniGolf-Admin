@@ -5,7 +5,7 @@ import { MapContainer, TileLayer, Marker, Polyline, useMapEvents, useMap } from 
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
-export type PinKind = "tee" | "green" | "landmark";
+export type PinKind = "tee" | "green" | "landmark" | "waypoint" | "cart_endpoint";
 
 export type MapPin = {
   id: string;
@@ -16,8 +16,14 @@ export type MapPin = {
 };
 
 export type CartPath = {
+  id: string;
   holeNumber: number;
   points: { lat: number; lng: number }[];
+};
+
+export type ViewTarget = {
+  key: number;
+  latlngs: [number, number][];
 };
 
 // Fix default Leaflet icon paths broken by webpack
@@ -35,8 +41,34 @@ const TEE_COLOR = "#2563eb";
 const GREEN_COLOR = "#16a34a";
 const LANDMARK_COLOR = "#b45309";
 const CART_PATH_COLOR = "#ef4444";
+const CART_PATH_ACTIVE_COLOR = "#ff0000";
 
 function makePinIcon(kind: PinKind, label: string, isActive = false) {
+  if (kind === "cart_endpoint") {
+    const bg = label === "S" ? "#22c55e" : "#ef4444";
+    return L.divIcon({
+      className: "",
+      html: `<div style="display:flex;flex-direction:column;align-items:center;pointer-events:none">
+        <div style="width:18px;height:18px;border-radius:9999px;background:${bg};border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center">
+          <span style="font-size:8px;font-weight:800;color:white;line-height:1">${label}</span>
+        </div>
+      </div>`,
+      iconSize: [18, 18],
+      iconAnchor: [9, 9],
+    });
+  }
+  if (kind === "waypoint") {
+    return L.divIcon({
+      className: "",
+      html: `<div style="display:flex;flex-direction:column;align-items:center;pointer-events:none">
+        <div style="width:20px;height:20px;border-radius:9999px;background:${CART_PATH_ACTIVE_COLOR};border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center">
+          <span style="font-size:9px;font-weight:800;color:white;line-height:1">${label}</span>
+        </div>
+      </div>`,
+      iconSize: [20, 20],
+      iconAnchor: [10, 10],
+    });
+  }
   const bg = kind === "tee" ? TEE_COLOR : kind === "green" ? GREEN_COLOR : LANDMARK_COLOR;
   const ring = isActive ? `box-shadow:0 0 0 3px ${bg},0 0 0 5px rgba(255,255,255,0.6);` : "";
   const size = isActive ? 14 : 10;
@@ -50,6 +82,23 @@ function makePinIcon(kind: PinKind, label: string, isActive = false) {
     iconSize: [50, 28],
     iconAnchor: [25, anchor],
   });
+}
+
+function ViewHandler({ target }: { target: ViewTarget | null }) {
+  const map = useMap();
+  const prevKey = useRef(-1);
+
+  useEffect(() => {
+    if (!target || target.key === prevKey.current) return;
+    prevKey.current = target.key;
+    if (target.latlngs.length === 1) {
+      map.flyTo(target.latlngs[0], Math.max(map.getZoom(), 17), { animate: true, duration: 0.6 });
+    } else {
+      map.fitBounds(L.latLngBounds(target.latlngs), { padding: [60, 60], maxZoom: 18, animate: true });
+    }
+  }, [map, target]);
+
+  return null;
 }
 
 function ClickHandler({
@@ -87,12 +136,16 @@ export default function CourseBuilderMap({
   pins,
   cartPaths,
   fitKey,
+  activeCartPathId,
+  viewTarget,
   isPlacingPin,
   onMapClick,
 }: {
   pins: MapPin[];
   cartPaths: CartPath[];
   fitKey: number;
+  activeCartPathId?: string;
+  viewTarget?: ViewTarget | null;
   isPlacingPin: boolean;
   onMapClick: (lat: number, lng: number) => void;
 }) {
@@ -119,20 +172,23 @@ export default function CourseBuilderMap({
         />
         <ClickHandler active={isPlacingPin} onMapClick={onMapClick} />
         <AutoFitPins pins={pins} fitKey={fitKey} />
-        {cartPaths.map((cp) =>
-          cp.points.length > 1 ? (
+        <ViewHandler target={viewTarget ?? null} />
+        {cartPaths.map((cp) => {
+          if (cp.points.length < 2) return null;
+          const isActive = cp.id === activeCartPathId;
+          return (
             <Polyline
-              key={`cp-${cp.holeNumber}`}
+              key={`cp-${cp.id}`}
               positions={cp.points.map((p) => [p.lat, p.lng] as [number, number])}
               pathOptions={{
-                color: CART_PATH_COLOR,
-                weight: 2,
+                color: isActive ? CART_PATH_ACTIVE_COLOR : CART_PATH_COLOR,
+                weight: isActive ? 3 : 2,
                 dashArray: "5 5",
-                opacity: 0.85,
+                opacity: isActive ? 1 : 0.5,
               }}
             />
-          ) : null
-        )}
+          );
+        })}
         {pins.map((pin) => (
           <Marker
             key={pin.id}

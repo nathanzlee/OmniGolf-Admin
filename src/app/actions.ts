@@ -12,6 +12,12 @@ function assertUuid(id: string, label: string) {
    Course types
 ===================================================== */
 
+export type CartPathInput = {
+  label?: string;
+  pathType?: string;
+  points: { lat: number; lng: number }[];
+};
+
 export type HoleInput = {
   holeNumber: number;
   teeLat: number;
@@ -19,7 +25,7 @@ export type HoleInput = {
   greenLat: number;
   greenLng: number;
   allottedTime: number;
-  cartPathPoints?: { lat: number; lng: number }[];
+  cartPaths?: CartPathInput[];
 };
 
 export type CourseLandmarkInput = {
@@ -123,7 +129,10 @@ export async function getCourseLandmarks(
 }
 
 export type CourseCartPath = {
+  id: string;
   holeNumber: number;
+  label: string | null;
+  pathType: string;
   coordinates: { lat: number; lng: number }[];
 };
 
@@ -133,15 +142,30 @@ export async function getCourseCartPaths(courseId: string): Promise<CourseCartPa
   const supabase = supabaseServer();
   const { data, error } = await supabase
     .from("course_hole_cart_paths")
-    .select("coordinates, course_holes!inner(hole_number)")
-    .eq("course_id", courseId);
+    .select(`
+      id,
+      label,
+      path_type,
+      course_holes!inner(hole_number),
+      course_hole_cart_path_points(seq, latitude, longitude)
+    `)
+    .eq("course_id", courseId)
+    .order("seq", { referencedTable: "course_hole_cart_path_points", ascending: true });
 
   if (error) throw new Error(`getCourseCartPaths failed: ${error.message}`);
 
-  return (data ?? []).map((row: any) => ({
-    holeNumber: row.course_holes.hole_number,
-    coordinates: Array.isArray(row.coordinates) ? row.coordinates : [],
-  }));
+  return (data ?? []).map((cp: any) => {
+    const courseHoles = Array.isArray(cp.course_holes) ? cp.course_holes[0] : cp.course_holes;
+    return {
+      id: cp.id,
+      holeNumber: courseHoles?.hole_number,
+      label: cp.label ?? null,
+      pathType: cp.path_type ?? "cart_path",
+      coordinates: [...(cp.course_hole_cart_path_points ?? [])]
+        .sort((a: any, b: any) => a.seq - b.seq)
+        .map((p: any) => ({ lat: p.latitude, lng: p.longitude })),
+    };
+  });
 }
 
 export async function saveCourseHoles(params: {
@@ -231,7 +255,7 @@ export async function saveCourseHoles(params: {
   if (holesErr) throw new Error(`save holes failed: ${holesErr.message}`);
 
   // ── Cart paths ──────────────────────────────────────────────────────────────
-  // Fetch hole IDs so we can key cart path rows by hole_id
+  // Fetch hole IDs so we can key cart paths by hole_id
   const { data: holeRecords, error: holeIdsErr } = await supabase
     .from("course_holes")
     .select("id, hole_number")
@@ -244,39 +268,52 @@ export async function saveCourseHoles(params: {
     holeIdByNumber[(h as any).hole_number] = (h as any).id;
   }
 
-  const holesWithPaths = holes.filter((h) => (h.cartPathPoints ?? []).length > 0);
-  const holesWithoutPaths = holes.filter((h) => (h.cartPathPoints ?? []).length === 0);
+  // Delete all existing cart paths for this course (cascades to points via FK)
+  const { error: deleteCartPathsErr } = await supabase
+    .from("course_hole_cart_paths")
+    .delete()
+    .eq("course_id", finalCourseId);
 
-  // Delete cart path rows for holes that now have no waypoints
-  const emptyHoleIds = holesWithoutPaths
-    .map((h) => holeIdByNumber[h.holeNumber])
-    .filter(Boolean);
-  if (emptyHoleIds.length > 0) {
-    const { error: deleteCartPathsErr } = await supabase
-      .from("course_hole_cart_paths")
-      .delete()
-      .in("hole_id", emptyHoleIds);
-    if (deleteCartPathsErr) throw new Error(`delete cart paths failed: ${deleteCartPathsErr.message}`);
-  }
+  if (deleteCartPathsErr) throw new Error(`delete cart paths failed: ${deleteCartPathsErr.message}`);
 
-  // Upsert cart path rows for holes that have waypoints
-  if (holesWithPaths.length > 0) {
-    const cartPathRows = holesWithPaths
-      .map((h) => ({
-        course_id: finalCourseId,
-        hole_id: holeIdByNumber[h.holeNumber],
-        coordinates: h.cartPathPoints,
-      }))
-      .filter((r) => r.hole_id);
+  // Insert new cart paths and their points
+  for (const h of holes) {
+    const holeCartPaths = h.cartPaths ?? [];
+    const holeId = holeIdByNumber[h.holeNumber];
+    if (!holeId) continue;
 
-    if (cartPathRows.length > 0) {
-      const { error: upsertCartPathsErr } = await supabase
+    for (const cp of holeCartPaths) {
+      if (cp.points.length === 0) continue;
+
+      const { data: cpRecord, error: insertCpErr } = await supabase
         .from("course_hole_cart_paths")
-        .upsert(cartPathRows, { onConflict: "hole_id" });
-      if (upsertCartPathsErr) throw new Error(`save cart paths failed: ${upsertCartPathsErr.message}`);
+        .insert({
+          course_id: finalCourseId,
+          hole_id: holeId,
+          label: cp.label ?? null,
+          path_type: cp.pathType ?? "cart_path",
+        })
+        .select("id")
+        .single();
+
+      if (insertCpErr) throw new Error(`insert cart path failed: ${insertCpErr.message}`);
+
+      const pointRows = cp.points.map((pt, seq) => ({
+        cart_path_id: cpRecord.id,
+        seq,
+        latitude: pt.lat,
+        longitude: pt.lng,
+      }));
+
+      const { error: insertPointsErr } = await supabase
+        .from("course_hole_cart_path_points")
+        .insert(pointRows);
+
+      if (insertPointsErr) throw new Error(`insert cart path points failed: ${insertPointsErr.message}`);
     }
   }
 
+  // ── Landmarks ───────────────────────────────────────────────────────────────
   const { error: deleteLandmarksErr } = await supabase
     .from("course_landmarks")
     .delete()
@@ -363,7 +400,7 @@ export type SessionGroupInput = {
   id?: string;
   label?: string;
   teeTime?: string;
-  playerUserIds: string[];
+  players: { userId: string; usingCarts: boolean }[];
 };
 
 export type SessionGroupRecord = {
@@ -375,6 +412,7 @@ export type SessionGroupRecord = {
 export type SessionGroupPlayerRecord = {
   group_id: string;
   user_id: string;
+  using_carts: boolean;
 };
 
 /* =====================================================
@@ -439,7 +477,7 @@ export async function createSession(params: {
 
   const seenUsers = new Set<string>();
   for (const group of groups) {
-    for (const userId of group.playerUserIds) {
+    for (const { userId } of group.players) {
       assertUuid(userId, "createSession.group.playerUserId");
       if (seenUsers.has(userId)) {
         throw new Error("A player cannot be assigned to more than one group.");
@@ -478,10 +516,11 @@ export async function createSession(params: {
       throw new Error(`createSession create group failed: ${createGroupErr.message}`);
     }
 
-    if (group.playerUserIds.length > 0) {
-      const rows = group.playerUserIds.map((userId) => ({
+    if (group.players.length > 0) {
+      const rows = group.players.map(({ userId, usingCarts }) => ({
         group_id: createdGroup.id,
         user_id: userId,
+        using_carts: usingCarts,
       }));
 
       const { error: insertPlayersErr } = await supabase
@@ -521,7 +560,7 @@ export async function getSessionGroups(
 
   const { data, error } = await supabase
     .from("session_groups")
-    .select("id, label, tee_time")
+    .select("id, label, tee_time, using_carts")
     .eq("session_id", sessionId)
     .order("created_at", { ascending: true });
 
@@ -541,6 +580,7 @@ export async function getSessionGroupPlayers(
     .select(`
       group_id,
       user_id,
+      using_carts,
       session_groups!inner (
         session_id
       )
@@ -552,6 +592,7 @@ export async function getSessionGroupPlayers(
   return (data ?? []).map((row: any) => ({
     group_id: row.group_id,
     user_id: row.user_id,
+    using_carts: row.using_carts ?? false,
   }));
 }
 
@@ -575,7 +616,7 @@ export async function updateSession(params: {
   for (const group of groups) {
     if (group.id) assertUuid(group.id, "updateSession.group.id");
 
-    for (const userId of group.playerUserIds) {
+    for (const { userId } of group.players) {
       assertUuid(userId, "updateSession.group.playerUserId");
       if (seenUsers.has(userId)) {
         throw new Error("A player cannot be assigned to more than one group.");
@@ -680,10 +721,11 @@ export async function updateSession(params: {
       throw new Error(`updateSession delete group players failed: ${deletePlayersErr.message}`);
     }
 
-    if (group.playerUserIds.length > 0) {
-      const rows = group.playerUserIds.map((userId) => ({
+    if (group.players.length > 0) {
+      const rows = group.players.map(({ userId, usingCarts }) => ({
         group_id: groupId,
         user_id: userId,
+        using_carts: usingCarts,
       }));
 
       const { error: insertPlayersErr } = await supabase

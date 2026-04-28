@@ -3,8 +3,8 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { saveCourseHoles, HoleInput, CourseLandmarkInput } from "../../actions";
-import type { CartPath, MapPin } from "./CourseBuilderMap";
+import { saveCourseHoles, HoleInput, CourseLandmarkInput, CourseCartPath } from "../../actions";
+import type { CartPath, MapPin, ViewTarget } from "./CourseBuilderMap";
 
 const CourseBuilderMap = dynamic(() => import("./CourseBuilderMap"), { ssr: false });
 
@@ -19,7 +19,6 @@ type HoleState = {
   greenLat: number | null;
   greenLng: number | null;
   allottedTime: string;
-  cartPath: { lat: number; lng: number }[];
 };
 
 type LandmarkState = {
@@ -31,10 +30,18 @@ type LandmarkState = {
   ep2Lng: number | null;
 };
 
+type CartPathState = {
+  localId: string;
+  holeIndex: number;
+  label: string;
+  pathType: string;
+  points: { lat: number; lng: number }[];
+};
+
 type ActiveField =
   | { kind: "tee"; holeIndex: number }
   | { kind: "green"; holeIndex: number }
-  | { kind: "cartPath"; holeIndex: number }
+  | { kind: "cartPath"; cpIndex: number }
   | { kind: "lm_ep1"; lmIndex: number }
   | { kind: "lm_ep2"; lmIndex: number };
 
@@ -73,7 +80,6 @@ function initHoles(): HoleState[] {
     greenLat: null,
     greenLng: null,
     allottedTime: "12",
-    cartPath: [],
   }));
 }
 
@@ -112,51 +118,6 @@ function FieldButton({
   );
 }
 
-// ── CartPathButton ─────────────────────────────────────────────────────────────
-
-function CartPathButton({
-  pointCount,
-  isActive,
-  onClick,
-  onClear,
-}: {
-  pointCount: number;
-  isActive: boolean;
-  onClick: () => void;
-  onClear: () => void;
-}) {
-  const isSet = pointCount > 0;
-  return (
-    <div className="flex min-w-0 flex-1 gap-0.5">
-      <button
-        type="button"
-        title={isSet ? `${pointCount} cart path point${pointCount === 1 ? "" : "s"}` : "Click to add cart path waypoints"}
-        onClick={onClick}
-        className={`flex min-w-0 flex-1 items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
-          isActive
-            ? "bg-blue-600 text-white ring-2 ring-blue-300 ring-offset-1"
-            : isSet
-            ? "border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100"
-            : "border border-zinc-200 bg-zinc-50 text-zinc-400 hover:bg-zinc-100"
-        }`}
-      >
-        <span className="shrink-0">{isActive ? "▸" : isSet ? "●" : "○"}</span>
-        <span className="truncate">{isSet ? `Path (${pointCount})` : "Path"}</span>
-      </button>
-      {isSet && (
-        <button
-          type="button"
-          title="Clear cart path"
-          onClick={onClear}
-          className="shrink-0 rounded-md border border-zinc-200 bg-zinc-50 px-1.5 py-1 text-xs text-zinc-400 hover:bg-red-50 hover:text-red-500"
-        >
-          ✕
-        </button>
-      )}
-    </div>
-  );
-}
-
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export default function CourseBuilder({
@@ -171,17 +132,20 @@ export default function CourseBuilder({
   const [courseName, setCourseName] = useState("");
   const [holes, setHoles] = useState<HoleState[]>(initHoles);
   const [landmarks, setLandmarks] = useState<LandmarkState[]>([]);
+  const [cartPaths, setCartPaths] = useState<CartPathState[]>([]);
   const [activeField, setActiveField] = useState<ActiveField | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [loadingCourse, setLoadingCourse] = useState(false);
   const [fitKey, setFitKey] = useState(0);
+  const [viewTarget, setViewTarget] = useState<ViewTarget | null>(null);
+  const [selectedWaypointIndex, setSelectedWaypointIndex] = useState<number | null>(null);
+  const [message, setMessage] = useState("");
 
   // Auto-load course from URL param on mount
   useEffect(() => {
     if (initialCourseId) handleLoadCourse(initialCourseId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const [message, setMessage] = useState("");
 
   // ── Load existing course ───────────────────────────────────────────────────
 
@@ -191,7 +155,9 @@ export default function CourseBuilder({
       setCourseName("");
       setHoles(initHoles());
       setLandmarks([]);
+      setCartPaths([]);
       setActiveField(null);
+      setSelectedWaypointIndex(null);
       setMessage("");
       return;
     }
@@ -208,26 +174,19 @@ export default function CourseBuilder({
       const loadedByNumber: Record<number, HoleInput> = {};
       for (const h of data.holes) loadedByNumber[h.holeNumber] = h;
 
-      const cartPathByHole: Record<number, { lat: number; lng: number }[]> = {};
-      for (const cp of data.cartPaths ?? []) {
-        cartPathByHole[cp.holeNumber] = cp.coordinates ?? [];
-      }
-
-      setHoles(
-        initHoles().map((blank) => {
-          const h = loadedByNumber[blank.holeNumber];
-          if (!h) return blank;
-          return {
-            holeNumber: h.holeNumber,
-            teeLat: h.teeLat ?? null,
-            teeLng: h.teeLng ?? null,
-            greenLat: h.greenLat ?? null,
-            greenLng: h.greenLng ?? null,
-            allottedTime: String(h.allottedTime),
-            cartPath: cartPathByHole[h.holeNumber] ?? [],
-          };
-        })
-      );
+      const newHoles = initHoles().map((blank) => {
+        const h = loadedByNumber[blank.holeNumber];
+        if (!h) return blank;
+        return {
+          holeNumber: h.holeNumber,
+          teeLat: h.teeLat ?? null,
+          teeLng: h.teeLng ?? null,
+          greenLat: h.greenLat ?? null,
+          greenLng: h.greenLng ?? null,
+          allottedTime: String(h.allottedTime),
+        };
+      });
+      setHoles(newHoles);
 
       setLandmarks(
         (data.landmarks ?? []).map((l: CourseLandmarkInput) => ({
@@ -240,7 +199,21 @@ export default function CourseBuilder({
         }))
       );
 
+      const holeIndexByNumber: Record<number, number> = {};
+      newHoles.forEach((h, i) => { holeIndexByNumber[h.holeNumber] = i; });
+
+      setCartPaths(
+        (data.cartPaths ?? []).map((cp: CourseCartPath) => ({
+          localId: makeId(),
+          holeIndex: holeIndexByNumber[cp.holeNumber] ?? 0,
+          label: cp.label ?? "",
+          pathType: cp.pathType ?? "cart_path",
+          points: cp.coordinates ?? [],
+        }))
+      );
+
       setActiveField(null);
+      setSelectedWaypointIndex(null);
       setFitKey((k) => k + 1);
     } catch (e: unknown) {
       setMessage(`❌ ${e instanceof Error ? e.message : "Failed to load course."}`);
@@ -256,13 +229,17 @@ export default function CourseBuilder({
     if (activeField.kind === "tee") return `Hole ${activeField.holeIndex + 1} Tee Box`;
     if (activeField.kind === "green") return `Hole ${activeField.holeIndex + 1} Green`;
     if (activeField.kind === "cartPath") {
-      const n = holes[activeField.holeIndex].cartPath.length;
-      return `Hole ${activeField.holeIndex + 1} Cart Path${n > 0 ? ` (${n} pts)` : ""}`;
+      const cp = cartPaths[activeField.cpIndex];
+      if (!cp) return null;
+      const holeNum = holes[cp.holeIndex]?.holeNumber ?? "?";
+      const n = cp.points.length;
+      const lbl = cp.label ? ` "${cp.label}"` : "";
+      return `Hole ${holeNum} Cart Path${lbl}${n > 0 ? ` (${n} pts)` : ""}`;
     }
     const lm = landmarks[activeField.lmIndex];
     const type = LANDMARK_LABELS[lm?.landmarkType ?? "other"];
     return activeField.kind === "lm_ep1" ? type : `${type} (far end)`;
-  }, [activeField, holes, landmarks]);
+  }, [activeField, cartPaths, holes, landmarks]);
 
   // ── Map pins ───────────────────────────────────────────────────────────────
 
@@ -282,18 +259,47 @@ export default function CourseBuilder({
       if (lm.ep2Lat !== null)
         result.push({ id: `lm-${lm.localId}-2`, lat: lm.ep2Lat, lng: lm.ep2Lng!, kind: "landmark", label: `${typeLabel} ②` });
     }
+    // Start (S) and end (E) pins for visible cart paths
+    const activeCpIdx = activeField?.kind === "cartPath" ? activeField.cpIndex : null;
+    for (let i = 0; i < cartPaths.length; i++) {
+      if (activeCpIdx !== null && i !== activeCpIdx) continue;
+      const cp = cartPaths[i];
+      if (cp.points.length >= 1) {
+        result.push({ id: `cp-start-${cp.localId}`, lat: cp.points[0].lat, lng: cp.points[0].lng, kind: "cart_endpoint", label: "S" });
+      }
+      if (cp.points.length >= 2) {
+        result.push({ id: `cp-end-${cp.localId}`, lat: cp.points[cp.points.length - 1].lat, lng: cp.points[cp.points.length - 1].lng, kind: "cart_endpoint", label: "E" });
+      }
+    }
+
+    if (activeField?.kind === "cartPath" && selectedWaypointIndex !== null) {
+      const cp = cartPaths[activeField.cpIndex];
+      const pt = cp?.points[selectedWaypointIndex];
+      if (pt) {
+        result.push({
+          id: "selected-waypoint",
+          lat: pt.lat,
+          lng: pt.lng,
+          kind: "waypoint",
+          label: String(selectedWaypointIndex + 1),
+        });
+      }
+    }
     return result;
-  }, [holes, landmarks]);
+  }, [holes, landmarks, cartPaths, activeField, selectedWaypointIndex]);
 
-  // ── Cart paths ─────────────────────────────────────────────────────────────
+  // ── Cart paths for map ─────────────────────────────────────────────────────
 
-  const cartPaths = useMemo<CartPath[]>(
-    () =>
-      holes
-        .filter((h) => h.cartPath.length > 0)
-        .map((h) => ({ holeNumber: h.holeNumber, points: h.cartPath })),
-    [holes]
-  );
+  const mapCartPaths = useMemo<CartPath[]>(() => {
+    const activeCpIndex = activeField?.kind === "cartPath" ? activeField.cpIndex : null;
+    return cartPaths
+      .filter((cp, i) => cp.points.length > 0 && (activeCpIndex === null || i === activeCpIndex))
+      .map((cp) => ({
+        id: cp.localId,
+        holeNumber: holes[cp.holeIndex]?.holeNumber ?? 0,
+        points: cp.points,
+      }));
+  }, [cartPaths, holes, activeField]);
 
   // ── Map click handler ──────────────────────────────────────────────────────
 
@@ -317,13 +323,12 @@ export default function CourseBuilder({
         const next = activeField.holeIndex + 1;
         setActiveField(next < 18 ? { kind: "tee", holeIndex: next } : null);
       } else if (activeField.kind === "cartPath") {
-        const idx = activeField.holeIndex;
-        setHoles((prev) =>
-          prev.map((h, i) =>
-            i === idx ? { ...h, cartPath: [...h.cartPath, { lat, lng }] } : h
+        const idx = activeField.cpIndex;
+        setCartPaths((prev) =>
+          prev.map((cp, i) =>
+            i === idx ? { ...cp, points: [...cp.points, { lat, lng }] } : cp
           )
         );
-        // Stay active so user can keep adding points
       } else if (activeField.kind === "lm_ep1") {
         setLandmarks((prev) =>
           prev.map((lm, i) =>
@@ -348,27 +353,99 @@ export default function CourseBuilder({
     [activeField, landmarks]
   );
 
+  // ── Cart path functions ────────────────────────────────────────────────────
+
   function undoLastCartPathPoint() {
     if (activeField?.kind !== "cartPath") return;
-    const i = activeField.holeIndex;
-    setHoles((prev) =>
-      prev.map((h, idx) =>
-        idx === i ? { ...h, cartPath: h.cartPath.slice(0, -1) } : h
+    const i = activeField.cpIndex;
+    const cp = cartPaths[i];
+    if (!cp || cp.points.length === 0) return;
+    const newLen = cp.points.length - 1;
+    if (selectedWaypointIndex !== null && selectedWaypointIndex >= newLen) {
+      setSelectedWaypointIndex(null);
+    }
+    setCartPaths((prev) =>
+      prev.map((cp, idx) =>
+        idx === i ? { ...cp, points: cp.points.slice(0, -1) } : cp
       )
     );
   }
 
-  function toggleActive(field: ActiveField) {
-    setActiveField((prev) => {
-      const same =
-        prev?.kind === field.kind &&
-        (field.kind === "tee" || field.kind === "green" || field.kind === "cartPath"
-          ? (prev as { holeIndex: number }).holeIndex ===
-            (field as { holeIndex: number }).holeIndex
-          : (prev as { lmIndex: number }).lmIndex ===
-            (field as { lmIndex: number }).lmIndex);
-      return same ? null : field;
+  function deleteCartPathPoint(cpIndex: number, pointIndex: number) {
+    setCartPaths((prev) =>
+      prev.map((cp, i) =>
+        i === cpIndex
+          ? { ...cp, points: cp.points.filter((_, pi) => pi !== pointIndex) }
+          : cp
+      )
+    );
+  }
+
+  function addCartPathForHole(holeIndex: number) {
+    const newCp: CartPathState = { localId: makeId(), holeIndex, label: "", pathType: "cart_path", points: [] };
+    setCartPaths((prev) => {
+      const newList = [...prev, newCp];
+      const cpIndex = newList.length - 1;
+      // Activate the new path immediately
+      setTimeout(() => setActiveField({ kind: "cartPath", cpIndex }), 0);
+      return newList;
     });
+    setSelectedWaypointIndex(null);
+  }
+
+  function updateCartPathLabel(i: number, label: string) {
+    setCartPaths((prev) =>
+      prev.map((cp, idx) => idx === i ? { ...cp, label } : cp)
+    );
+  }
+
+  function removeCartPath(i: number) {
+    setCartPaths((prev) => prev.filter((_, idx) => idx !== i));
+    setActiveField((af) => {
+      if (!af || af.kind !== "cartPath") return af;
+      if (af.cpIndex === i) return null;
+      if (af.cpIndex > i) return { kind: "cartPath", cpIndex: af.cpIndex - 1 };
+      return af;
+    });
+    setSelectedWaypointIndex(null);
+  }
+
+  function toggleActive(field: ActiveField) {
+    const isSame = (() => {
+      if (!activeField || activeField.kind !== field.kind) return false;
+      if (field.kind === "cartPath")
+        return (activeField as { cpIndex: number }).cpIndex === (field as { cpIndex: number }).cpIndex;
+      if (field.kind === "tee" || field.kind === "green")
+        return (activeField as { holeIndex: number }).holeIndex === (field as { holeIndex: number }).holeIndex;
+      return (activeField as { lmIndex: number }).lmIndex === (field as { lmIndex: number }).lmIndex;
+    })();
+
+    setActiveField(isSame ? null : field);
+
+    if (
+      field.kind !== "cartPath" ||
+      (activeField?.kind === "cartPath" &&
+        (activeField as { cpIndex: number }).cpIndex !== (field as { cpIndex: number }).cpIndex)
+    ) {
+      setSelectedWaypointIndex(null);
+    }
+
+    if (isSame) return;
+
+    const key = Date.now();
+    if (field.kind === "tee") {
+      const h = holes[field.holeIndex];
+      if (h.teeLat !== null)
+        setViewTarget({ key, latlngs: [[h.teeLat, h.teeLng!]] });
+    } else if (field.kind === "green") {
+      const h = holes[field.holeIndex];
+      if (h.greenLat !== null)
+        setViewTarget({ key, latlngs: [[h.greenLat, h.greenLng!]] });
+    } else if (field.kind === "cartPath") {
+      const cp = cartPaths[(field as { cpIndex: number }).cpIndex];
+      if (cp && cp.points.length > 0)
+        setViewTarget({ key, latlngs: cp.points.map((p) => [p.lat, p.lng] as [number, number]) });
+    }
   }
 
   // ── Landmarks ──────────────────────────────────────────────────────────────
@@ -418,14 +495,26 @@ export default function CourseBuilder({
       return;
     }
 
-    const holesInput: HoleInput[] = holes.map((h) => ({
+    const cartPathsByHoleIndex: Record<number, CartPathState[]> = {};
+    for (const cp of cartPaths) {
+      if (!cartPathsByHoleIndex[cp.holeIndex]) cartPathsByHoleIndex[cp.holeIndex] = [];
+      cartPathsByHoleIndex[cp.holeIndex].push(cp);
+    }
+
+    const holesInput: HoleInput[] = holes.map((h, i) => ({
       holeNumber: h.holeNumber,
       teeLat: h.teeLat!,
       teeLng: h.teeLng!,
       greenLat: h.greenLat!,
       greenLng: h.greenLng!,
       allottedTime: Math.max(1, parseInt(h.allottedTime, 10) || 12),
-      cartPathPoints: h.cartPath,
+      cartPaths: (cartPathsByHoleIndex[i] ?? [])
+        .filter((cp) => cp.points.length > 0)
+        .map((cp) => ({
+          label: cp.label || undefined,
+          pathType: cp.pathType,
+          points: cp.points,
+        })),
     }));
 
     const landmarksInput: CourseLandmarkInput[] = landmarks
@@ -458,13 +547,15 @@ export default function CourseBuilder({
   const inputCls =
     "rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 outline-none focus:border-zinc-400";
 
+  const activeCp = activeField?.kind === "cartPath" ? cartPaths[activeField.cpIndex] : null;
+
   return (
     <div className="flex h-full flex-col">
       <div className="mb-3">
         <h1 className="text-xl font-semibold text-zinc-900">Build Course</h1>
         <p className="mt-1 text-sm text-zinc-600">
-          Click a button in the holes table, then click the map to place that pin.
-          Tee/Green auto-advance through all 18 holes. Cart path appends waypoints until you click Done.
+          Click a field button, then click the map to place coordinates.
+          Tee/Green auto-advance through all 18 holes. Cart paths append waypoints until you click Done.
         </p>
       </div>
 
@@ -476,7 +567,7 @@ export default function CourseBuilder({
             <strong>{activeLabel}</strong>
           </span>
           <div className="flex items-center gap-3">
-            {activeField?.kind === "cartPath" && holes[activeField.holeIndex].cartPath.length > 0 && (
+            {activeField?.kind === "cartPath" && activeCp && activeCp.points.length > 0 && (
               <button
                 type="button"
                 onClick={undoLastCartPathPoint}
@@ -487,12 +578,105 @@ export default function CourseBuilder({
             )}
             <button
               type="button"
-              onClick={() => setActiveField(null)}
+              onClick={() => { setActiveField(null); setSelectedWaypointIndex(null); }}
               className="text-xs text-blue-500 hover:text-blue-700"
             >
               Done
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Cart path waypoint list */}
+      {activeField?.kind === "cartPath" && activeCp && (
+        <div className="mb-3 rounded-lg border border-blue-200 bg-white">
+          <div className="flex items-center gap-2 border-b border-blue-100 px-3 py-2">
+            <span className="shrink-0 text-xs font-semibold text-zinc-500 uppercase tracking-wide">
+              Hole {holes[activeCp.holeIndex]?.holeNumber} · Label:
+            </span>
+            <input
+              value={activeCp.label}
+              onChange={(e) => updateCartPathLabel(activeField.cpIndex, e.target.value)}
+              placeholder="optional"
+              className="min-w-0 flex-1 rounded border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-xs text-zinc-900 outline-none focus:border-zinc-400"
+            />
+            <span className="shrink-0 text-xs text-zinc-400">{activeCp.points.length} pts</span>
+          </div>
+          {activeCp.points.length === 0 ? (
+            <div className="px-3 py-2 flex flex-col gap-2">
+              <p className="text-xs text-zinc-400">No waypoints yet — click the map to add points.</p>
+              {(() => {
+                const hasOtherPathsForSameHole = cartPaths.some(
+                  (cp, i) => i !== activeField.cpIndex && cp.holeIndex === activeCp.holeIndex && cp.points.length > 0
+                );
+                const prevHoleIndex = activeCp.holeIndex - 1;
+                const prevPath = !hasOtherPathsForSameHole && prevHoleIndex >= 0
+                  ? cartPaths.filter((cp) => cp.holeIndex === prevHoleIndex && cp.points.length > 0).at(-1)
+                  : undefined;
+                if (!prevPath) return null;
+                const endPt = prevPath.points[prevPath.points.length - 1];
+                const prevHoleNum = holes[prevHoleIndex]?.holeNumber ?? prevHoleIndex + 1;
+                return (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setCartPaths((prev) =>
+                        prev.map((cp, i) =>
+                          i === activeField.cpIndex ? { ...cp, points: [{ lat: endPt.lat, lng: endPt.lng }] } : cp
+                        )
+                      )
+                    }
+                    className="self-start rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700 hover:bg-amber-100"
+                  >
+                    ↳ Start from end of hole {prevHoleNum} path
+                  </button>
+                );
+              })()}
+            </div>
+          ) : (
+            <div className="flex gap-1 overflow-x-auto px-3 py-2 pb-3">
+              {activeCp.points.map((pt, idx) => {
+                const isSelected = selectedWaypointIndex === idx;
+                return (
+                  <div key={idx} className="flex shrink-0 items-center gap-0.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (isSelected) {
+                          setSelectedWaypointIndex(null);
+                        } else {
+                          setSelectedWaypointIndex(idx);
+                          setViewTarget({ key: Date.now(), latlngs: [[pt.lat, pt.lng]] });
+                        }
+                      }}
+                      className={`flex items-center gap-1 rounded-md px-2 py-1 font-mono text-xs font-medium transition-colors ${
+                        isSelected
+                          ? "bg-red-500 text-white ring-2 ring-red-300 ring-offset-1"
+                          : "border border-zinc-200 bg-zinc-50 text-zinc-600 hover:bg-zinc-100"
+                      }`}
+                    >
+                      <span className={`font-semibold ${isSelected ? "text-white" : "text-zinc-400"}`}>
+                        {idx + 1}
+                      </span>
+                      <span>{pt.lat.toFixed(5)}, {pt.lng.toFixed(5)}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (selectedWaypointIndex === idx) setSelectedWaypointIndex(null);
+                        else if (selectedWaypointIndex !== null && selectedWaypointIndex > idx)
+                          setSelectedWaypointIndex(selectedWaypointIndex - 1);
+                        deleteCartPathPoint(activeField.cpIndex, idx);
+                      }}
+                      className="rounded px-1 py-0.5 text-xs text-zinc-300 hover:bg-red-50 hover:text-red-500"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
@@ -547,7 +731,6 @@ export default function CourseBuilder({
               {holes.map((hole, i) => {
                 const teeActive = activeField?.kind === "tee" && activeField.holeIndex === i;
                 const greenActive = activeField?.kind === "green" && activeField.holeIndex === i;
-                const cartPathActive = activeField?.kind === "cartPath" && activeField.holeIndex === i;
                 return (
                   <div key={hole.holeNumber} className="flex items-center gap-1.5 px-3 py-1.5">
                     <span className="w-5 shrink-0 text-center text-xs font-semibold text-zinc-500">
@@ -566,16 +749,6 @@ export default function CourseBuilder({
                       lng={hole.greenLng}
                       isActive={greenActive}
                       onClick={() => toggleActive({ kind: "green", holeIndex: i })}
-                    />
-                    <CartPathButton
-                      pointCount={hole.cartPath.length}
-                      isActive={cartPathActive}
-                      onClick={() => toggleActive({ kind: "cartPath", holeIndex: i })}
-                      onClear={() =>
-                        setHoles((prev) =>
-                          prev.map((h, idx) => (idx === i ? { ...h, cartPath: [] } : h))
-                        )
-                      }
                     />
                     <input
                       type="number"
@@ -598,7 +771,69 @@ export default function CourseBuilder({
               })}
             </div>
             <div className="border-t border-zinc-100 px-4 py-2 text-xs text-zinc-400">
-              Min = allotted time · Path = cart path waypoints (red dashes on map)
+              Min = allotted time
+            </div>
+          </div>
+
+          {/* Cart Paths */}
+          <div className="rounded-xl border border-zinc-200 bg-white shadow-sm">
+            <div className="border-b border-zinc-100 px-4 py-2.5">
+              <h2 className="text-sm font-semibold text-zinc-900">Cart Paths</h2>
+            </div>
+            <div className="divide-y divide-zinc-100">
+              {holes.map((hole, hi) => {
+                const holePaths = cartPaths
+                  .map((cp, i) => ({ cp, i }))
+                  .filter(({ cp }) => cp.holeIndex === hi);
+                return (
+                  <div key={hole.holeNumber} className="flex items-start gap-1.5 px-3 py-1.5">
+                    <span className="mt-1.5 w-5 shrink-0 text-center text-xs font-semibold text-zinc-500">
+                      {hole.holeNumber}
+                    </span>
+                    <div className="flex min-w-0 flex-1 flex-wrap gap-1">
+                      {holePaths.map(({ cp, i }) => {
+                        const isActive = activeField?.kind === "cartPath" && activeField.cpIndex === i;
+                        const isSet = cp.points.length > 0;
+                        return (
+                          <div key={cp.localId} className="flex items-center gap-0.5">
+                            <button
+                              type="button"
+                              onClick={() => toggleActive({ kind: "cartPath", cpIndex: i })}
+                              className={`flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+                                isActive
+                                  ? "bg-blue-600 text-white ring-2 ring-blue-300 ring-offset-1"
+                                  : isSet
+                                  ? "border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                                  : "border border-zinc-200 bg-zinc-50 text-zinc-400 hover:bg-zinc-100"
+                              }`}
+                            >
+                              <span>{isActive ? "▸" : isSet ? "●" : "○"}</span>
+                              <span className="ml-0.5">
+                                {cp.label || "Path"}
+                                {isSet ? ` (${cp.points.length})` : ""}
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => removeCartPath(i)}
+                              className="rounded px-1 py-0.5 text-xs text-zinc-300 hover:bg-red-50 hover:text-red-500"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        );
+                      })}
+                      <button
+                        type="button"
+                        onClick={() => addCartPathForHole(hi)}
+                        className="rounded-md border border-dashed border-zinc-200 px-2 py-1 text-xs text-zinc-400 hover:border-zinc-400 hover:text-zinc-600"
+                      >
+                        + Add
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
 
@@ -689,8 +924,14 @@ export default function CourseBuilder({
         <div className="min-h-0 flex-1 overflow-hidden">
           <CourseBuilderMap
             pins={pins}
-            cartPaths={cartPaths}
+            cartPaths={mapCartPaths}
             fitKey={fitKey}
+            activeCartPathId={
+              activeField?.kind === "cartPath"
+                ? cartPaths[activeField.cpIndex]?.localId
+                : undefined
+            }
+            viewTarget={viewTarget}
             isPlacingPin={!!activeField}
             onMapClick={handleMapClick}
           />

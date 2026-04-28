@@ -47,6 +47,7 @@ export type TestCaseLandmark = {
 export type TestCase = {
   id: string;
   name: string;
+  description: string;
   courseId: string | null;
   courseName: string | null;
   holes: TestCaseHole[];
