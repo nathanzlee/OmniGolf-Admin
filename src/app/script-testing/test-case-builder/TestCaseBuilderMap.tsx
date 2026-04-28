@@ -10,7 +10,6 @@ export type LocationPin = {
   lat: number;
   lng: number;
   color: string;
-  index: number;
   isActivePlayer: boolean;
   playerName: string;
 };
@@ -20,15 +19,12 @@ export type ViewTarget = {
   latlngs: [number, number][];
 };
 
-function makeLocationIcon(color: string, index: number, isActivePlayer: boolean) {
-  const size = isActivePlayer ? 22 : 12;
+function makeLocationIcon(color: string, isActivePlayer: boolean) {
+  const size = isActivePlayer ? 20 : 12;
   const anchor = size / 2;
-  const inner = isActivePlayer
-    ? `<span style="font-size:9px;font-weight:800;color:white;line-height:1">${index}</span>`
-    : "";
   return L.divIcon({
     className: "",
-    html: `<div style="width:${size}px;height:${size}px;border-radius:9999px;background:${color};border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center">${inner}</div>`,
+    html: `<div style="width:${size}px;height:${size}px;border-radius:9999px;background:${color};border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.4)"></div>`,
     iconSize: [size, size],
     iconAnchor: [anchor, anchor],
   });
@@ -107,12 +103,10 @@ export default function TestCaseBuilderMap({
           <Marker
             key={pin.id}
             position={[pin.lat, pin.lng]}
-            icon={makeLocationIcon(pin.color, pin.index, pin.isActivePlayer)}
+            icon={makeLocationIcon(pin.color, pin.isActivePlayer)}
           >
             <Tooltip direction="top" offset={[0, -8]} opacity={0.9}>
-              <span className="text-xs">
-                <strong>{pin.playerName}</strong> #{pin.index}
-              </span>
+              <span className="text-xs font-semibold">{pin.playerName}</span>
             </Tooltip>
           </Marker>
         ))}
