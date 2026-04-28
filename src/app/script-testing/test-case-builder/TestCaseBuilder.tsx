@@ -2,6 +2,9 @@
 
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { upsertTestCase } from "@/lib/testCases";
+import type { TestCase } from "@/lib/testCases";
 import type { LocationPin, ViewTarget } from "./TestCaseBuilderMap";
 
 const TestCaseBuilderMap = dynamic(() => import("./TestCaseBuilderMap"), { ssr: false });
@@ -59,9 +62,9 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
   const [activeSnapshotIdx, setActiveSnapshotIdx] = useState(0);
   const [activePlayerId, setActivePlayerId] = useState<string | null>(null);
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
   const [hasRecent, setHasRecent] = useState(false);
 
+  const router = useRouter();
   const restoringRef = useRef(false);
   const activeSnapshot = snapshots[activeSnapshotIdx] ?? null;
 
@@ -352,10 +355,38 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
     };
   }
 
-  function copyJson() {
-    navigator.clipboard.writeText(JSON.stringify(buildSessionJson(), null, 2));
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  function downloadJson() {
+    const json = JSON.stringify(buildSessionJson(), null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `mock-session-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function exportAsTestCase() {
+    const json = JSON.stringify(buildSessionJson(), null, 2);
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const tc: TestCase = {
+      id,
+      name: selectedCourseName ? `${selectedCourseName} Mock` : "Mock Session",
+      description: "",
+      courseId: selectedCourseId || null,
+      courseName: selectedCourseName || null,
+      holes: [],
+      landmarks: [],
+      groups: groups.map((g) => ({ localId: g.localId, label: g.label, teeTime: g.teeTime })),
+      pacingRows: [],
+      events: [],
+      sessionJson: json,
+      createdAt: now,
+      updatedAt: now,
+    };
+    upsertTestCase(tc);
+    router.push(`/script-testing/test-cases/${id}`);
   }
 
   const inputCls = "rounded border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-xs text-zinc-900 outline-none focus:border-zinc-400 focus:bg-white";
@@ -606,34 +637,63 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
           )}
         </div>
 
-        {/* Export + session actions */}
-        <div className="flex flex-col gap-2 pb-4">
-          <button
-            type="button"
-            onClick={copyJson}
-            disabled={players.length === 0 || snapshots.length === 0}
-            className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-zinc-800 disabled:opacity-40"
-          >
-            {copied ? "Copied!" : "Copy Session JSON"}
-          </button>
-          <div className="flex gap-2">
+        {/* Actions */}
+        <div className="flex gap-2 pb-4">
+          {/* Download session JSON */}
+          <div className="group relative">
             <button
               type="button"
-              onClick={loadRecent}
-              disabled={!hasRecent}
-              className="flex-1 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-sm hover:bg-zinc-50 disabled:opacity-40"
+              onClick={downloadJson}
+              disabled={players.length === 0 || snapshots.length === 0}
+              className="flex items-center justify-center rounded-lg border border-zinc-200 bg-white p-2 text-zinc-600 shadow-sm hover:bg-zinc-50 disabled:opacity-40"
             >
-              Load Recent
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
             </button>
+            <span className="pointer-events-none absolute bottom-full left-1/2 mb-1.5 -translate-x-1/2 whitespace-nowrap rounded-md bg-zinc-800 px-2 py-1 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100 z-50">
+              Download session JSON
+            </span>
+          </div>
+
+          {/* Export as new test case */}
+          <div className="group relative">
+            <button
+              type="button"
+              onClick={exportAsTestCase}
+              disabled={players.length === 0 || snapshots.length === 0}
+              className="flex items-center justify-center rounded-lg border border-zinc-200 bg-white p-2 text-zinc-600 shadow-sm hover:bg-zinc-50 disabled:opacity-40"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="12" y1="18" x2="12" y2="12"/>
+                <line x1="9" y1="15" x2="15" y2="15"/>
+              </svg>
+            </button>
+            <span className="pointer-events-none absolute bottom-full left-1/2 mb-1.5 -translate-x-1/2 whitespace-nowrap rounded-md bg-zinc-800 px-2 py-1 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100 z-50">
+              Export as new test case
+            </span>
+          </div>
+
+          {/* Clear */}
+          <div className="group relative">
             <button
               type="button"
               onClick={clearState}
-              className="flex-1 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-sm hover:bg-red-50 hover:text-red-600 hover:border-red-200"
+              className="flex items-center justify-center rounded-lg border border-zinc-200 bg-white p-2 text-zinc-600 shadow-sm hover:bg-red-50 hover:text-red-600 hover:border-red-200"
             >
-              Clear
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="3 6 5 6 21 6"/>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+              </svg>
             </button>
+            <span className="pointer-events-none absolute bottom-full left-1/2 mb-1.5 -translate-x-1/2 whitespace-nowrap rounded-md bg-zinc-800 px-2 py-1 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100 z-50">
+              Clear
+            </span>
           </div>
-          <p className="text-xs text-zinc-400">Paste JSON into the Session Visualizer to preview.</p>
         </div>
       </div>
 
