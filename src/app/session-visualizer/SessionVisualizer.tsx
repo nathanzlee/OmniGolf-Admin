@@ -537,6 +537,7 @@ export default function SessionVisualizer({ completedSessions }: { completedSess
                   upsertTestCase({
                     id: newId,
                     name: data?.session_name ?? "Imported Session",
+                    description: "",
                     courseId: data?.course_id ?? null,
                     courseName: data?.course_name ?? null,
                     holes: [],
