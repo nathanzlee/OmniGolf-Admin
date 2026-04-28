@@ -606,11 +606,8 @@ export default function CourseBuilder({
             <div className="px-3 py-2 flex flex-col gap-2">
               <p className="text-xs text-zinc-400">No waypoints yet — click the map to add points.</p>
               {(() => {
-                const hasOtherPathsForSameHole = cartPaths.some(
-                  (cp, i) => i !== activeField.cpIndex && cp.holeIndex === activeCp.holeIndex && cp.points.length > 0
-                );
                 const prevHoleIndex = activeCp.holeIndex - 1;
-                const prevPath = !hasOtherPathsForSameHole && prevHoleIndex >= 0
+                const prevPath = prevHoleIndex >= 0
                   ? cartPaths.filter((cp) => cp.holeIndex === prevHoleIndex && cp.points.length > 0).at(-1)
                   : undefined;
                 if (!prevPath) return null;
