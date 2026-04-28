@@ -259,16 +259,32 @@ export default function CourseBuilder({
       if (lm.ep2Lat !== null)
         result.push({ id: `lm-${lm.localId}-2`, lat: lm.ep2Lat, lng: lm.ep2Lng!, kind: "landmark", label: `${typeLabel} ②` });
     }
-    // Start (S) and end (E) pins for visible cart paths
+    // Start/end pins for cart paths: S/E labels only when editing that path
     const activeCpIdx = activeField?.kind === "cartPath" ? activeField.cpIndex : null;
     for (let i = 0; i < cartPaths.length; i++) {
       if (activeCpIdx !== null && i !== activeCpIdx) continue;
       const cp = cartPaths[i];
+      const editing = i === activeCpIdx;
       if (cp.points.length >= 1) {
-        result.push({ id: `cp-start-${cp.localId}`, lat: cp.points[0].lat, lng: cp.points[0].lng, kind: "cart_endpoint", label: "S" });
+        result.push({ id: `cp-start-${cp.localId}`, lat: cp.points[0].lat, lng: cp.points[0].lng, kind: "cart_endpoint", label: editing ? "S" : "" });
       }
       if (cp.points.length >= 2) {
-        result.push({ id: `cp-end-${cp.localId}`, lat: cp.points[cp.points.length - 1].lat, lng: cp.points[cp.points.length - 1].lng, kind: "cart_endpoint", label: "E" });
+        result.push({ id: `cp-end-${cp.localId}`, lat: cp.points[cp.points.length - 1].lat, lng: cp.points[cp.points.length - 1].lng, kind: "cart_endpoint", label: editing ? "E" : "" });
+      }
+    }
+
+    // Ghost end pin when editing a path that has a sibling on the same hole
+    if (activeCpIdx !== null && cartPaths[activeCpIdx]) {
+      const editingCp = cartPaths[activeCpIdx];
+      if (editingCp.points.length >= 1) {
+        const sibling = cartPaths.find((cp, i) => i !== activeCpIdx && cp.holeIndex === editingCp.holeIndex && cp.points.length > 0);
+        if (sibling) {
+          const ghostEnd = sibling.points[sibling.points.length - 1];
+          const lastPt = editingCp.points[editingCp.points.length - 1];
+          if (lastPt.lat !== ghostEnd.lat || lastPt.lng !== ghostEnd.lng) {
+            result.push({ id: "cp-ghost-end", lat: ghostEnd.lat, lng: ghostEnd.lng, kind: "cart_ghost", label: "E" });
+          }
+        }
       }
     }
 
@@ -292,8 +308,9 @@ export default function CourseBuilder({
 
   const mapCartPaths = useMemo<CartPath[]>(() => {
     const activeCpIndex = activeField?.kind === "cartPath" ? activeField.cpIndex : null;
+    if (activeCpIndex === null) return [];
     return cartPaths
-      .filter((cp, i) => cp.points.length > 0 && (activeCpIndex === null || i === activeCpIndex))
+      .filter((cp, i) => cp.points.length > 0 && i === activeCpIndex)
       .map((cp) => ({
         id: cp.localId,
         holeNumber: holes[cp.holeIndex]?.holeNumber ?? 0,
@@ -382,15 +399,32 @@ export default function CourseBuilder({
   }
 
   function addCartPathForHole(holeIndex: number) {
-    const newCp: CartPathState = { localId: makeId(), holeIndex, label: "", pathType: "cart_path", points: [] };
+    const sibling = cartPaths.find((cp) => cp.holeIndex === holeIndex && cp.points.length > 0);
+    const startPt = sibling ? sibling.points[0] : undefined;
+    const newCp: CartPathState = {
+      localId: makeId(), holeIndex, label: "", pathType: "cart_path",
+      points: startPt ? [{ lat: startPt.lat, lng: startPt.lng }] : [],
+    };
     setCartPaths((prev) => {
       const newList = [...prev, newCp];
       const cpIndex = newList.length - 1;
-      // Activate the new path immediately
       setTimeout(() => setActiveField({ kind: "cartPath", cpIndex }), 0);
       return newList;
     });
     setSelectedWaypointIndex(null);
+  }
+
+  function commitGhostEnd(cpIndex: number) {
+    setCartPaths((prev) => {
+      const cp = prev[cpIndex];
+      if (!cp || cp.points.length === 0) return prev;
+      const sibling = prev.find((other, i) => i !== cpIndex && other.holeIndex === cp.holeIndex && other.points.length > 0);
+      if (!sibling) return prev;
+      const ghostEnd = sibling.points[sibling.points.length - 1];
+      const lastPt = cp.points[cp.points.length - 1];
+      if (lastPt.lat === ghostEnd.lat && lastPt.lng === ghostEnd.lng) return prev;
+      return prev.map((p, i) => i === cpIndex ? { ...p, points: [...p.points, { lat: ghostEnd.lat, lng: ghostEnd.lng }] } : p);
+    });
   }
 
   function updateCartPathLabel(i: number, label: string) {
@@ -419,6 +453,11 @@ export default function CourseBuilder({
         return (activeField as { holeIndex: number }).holeIndex === (field as { holeIndex: number }).holeIndex;
       return (activeField as { lmIndex: number }).lmIndex === (field as { lmIndex: number }).lmIndex;
     })();
+
+    // Commit ghost end when leaving a cart path
+    if (activeField?.kind === "cartPath") {
+      commitGhostEnd((activeField as { cpIndex: number }).cpIndex);
+    }
 
     setActiveField(isSame ? null : field);
 
@@ -578,7 +617,11 @@ export default function CourseBuilder({
             )}
             <button
               type="button"
-              onClick={() => { setActiveField(null); setSelectedWaypointIndex(null); }}
+              onClick={() => {
+                if (activeField?.kind === "cartPath") commitGhostEnd(activeField.cpIndex);
+                setActiveField(null);
+                setSelectedWaypointIndex(null);
+              }}
               className="text-xs text-blue-500 hover:text-blue-700"
             >
               Done
@@ -672,6 +715,21 @@ export default function CourseBuilder({
                   </div>
                 );
               })}
+              {(() => {
+                const sibling = cartPaths.find((cp, i) => i !== activeField.cpIndex && cp.holeIndex === activeCp.holeIndex && cp.points.length > 0);
+                if (!sibling) return null;
+                const ghostEnd = sibling.points[sibling.points.length - 1];
+                const lastPt = activeCp.points[activeCp.points.length - 1];
+                if (lastPt.lat === ghostEnd.lat && lastPt.lng === ghostEnd.lng) return null;
+                return (
+                  <div className="flex shrink-0 items-center">
+                    <div className="flex items-center gap-1 rounded-md border border-dashed border-zinc-300 px-2 py-1 font-mono text-xs text-zinc-400">
+                      <span className="font-semibold text-zinc-300">{activeCp.points.length + 1}</span>
+                      <span>{ghostEnd.lat.toFixed(5)}, {ghostEnd.lng.toFixed(5)}</span>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           )}
         </div>

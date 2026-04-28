@@ -5,7 +5,7 @@ import { MapContainer, TileLayer, Marker, Polyline, useMapEvents, useMap } from 
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
-export type PinKind = "tee" | "green" | "landmark" | "waypoint" | "cart_endpoint";
+export type PinKind = "tee" | "green" | "landmark" | "waypoint" | "cart_endpoint" | "cart_ghost";
 
 export type MapPin = {
   id: string;
@@ -44,17 +44,39 @@ const CART_PATH_COLOR = "#ef4444";
 const CART_PATH_ACTIVE_COLOR = "#ff0000";
 
 function makePinIcon(kind: PinKind, label: string, isActive = false) {
-  if (kind === "cart_endpoint") {
-    const bg = label === "S" ? "#22c55e" : "#ef4444";
+  if (kind === "cart_ghost") {
     return L.divIcon({
       className: "",
       html: `<div style="display:flex;flex-direction:column;align-items:center;pointer-events:none">
-        <div style="width:18px;height:18px;border-radius:9999px;background:${bg};border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center">
-          <span style="font-size:8px;font-weight:800;color:white;line-height:1">${label}</span>
+        <div style="width:18px;height:18px;border-radius:9999px;background:transparent;border:2px dashed #a1a1aa;display:flex;align-items:center;justify-content:center">
+          <span style="font-size:8px;font-weight:800;color:#a1a1aa;line-height:1">${label}</span>
         </div>
       </div>`,
       iconSize: [18, 18],
       iconAnchor: [9, 9],
+    });
+  }
+  if (kind === "cart_endpoint") {
+    const bg = label === "S" ? "#22c55e" : label === "E" ? "#ef4444" : "#6b7280";
+    if (label) {
+      return L.divIcon({
+        className: "",
+        html: `<div style="display:flex;flex-direction:column;align-items:center;pointer-events:none">
+          <div style="width:18px;height:18px;border-radius:9999px;background:${bg};border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center">
+            <span style="font-size:8px;font-weight:800;color:white;line-height:1">${label}</span>
+          </div>
+        </div>`,
+        iconSize: [18, 18],
+        iconAnchor: [9, 9],
+      });
+    }
+    return L.divIcon({
+      className: "",
+      html: `<div style="display:flex;flex-direction:column;align-items:center;pointer-events:none">
+        <div style="width:10px;height:10px;border-radius:9999px;background:${bg};border:2px solid white;box-shadow:0 1px 3px rgba(0,0,0,0.35)"></div>
+      </div>`,
+      iconSize: [10, 10],
+      iconAnchor: [5, 5],
     });
   }
   if (kind === "waypoint") {
