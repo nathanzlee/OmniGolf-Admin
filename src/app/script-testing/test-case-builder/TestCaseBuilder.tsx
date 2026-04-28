@@ -17,13 +17,9 @@ function makeId() {
 }
 
 type CourseOption = { id: string; name: string };
-
-type MockGroup = { localId: string; label: string; teeTime: string };
-
+type MockGroup = { localId: string; label: string; teeTime: string }; // teeTime: datetime-local or ""
 type MockPlayer = { localId: string; name: string; groupId: string | null };
-
-type Snapshot = { localId: string; timestamp: string }; // datetime-local "2024-01-01T10:00"
-
+type Snapshot = { localId: string; timestamp: string; sourceGroupId: string | null };
 type MockLocation = { localId: string; snapshotId: string; playerId: string; lat: number; lng: number };
 
 function defaultTimestamp() {
@@ -36,14 +32,6 @@ function advanceByMinutes(ts: string, minutes: number) {
   const d = new Date(ts);
   d.setMinutes(d.getMinutes() + minutes);
   return d.toISOString().slice(0, 16);
-}
-
-function fmtTimestamp(ts: string) {
-  try {
-    return new Date(ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-  } catch {
-    return ts;
-  }
 }
 
 export default function TestCaseBuilder({ courseOptions }: { courseOptions: CourseOption[] }) {
@@ -76,20 +64,28 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
     return p.groupId ? (groupColorMap.get(p.groupId) ?? UNASSIGNED_COLOR) : UNASSIGNED_COLOR;
   }
 
-  // Locations belonging to the active snapshot
+  function isBlockedAtSnapshot(snap: Snapshot | null, player: MockPlayer): boolean {
+    if (!snap || !player.groupId) return false;
+    const group = groups.find((g) => g.localId === player.groupId);
+    if (!group?.teeTime) return false;
+    return snap.timestamp < group.teeTime;
+  }
+
   const snapshotLocs = useMemo(
     () => (activeSnapshot ? locations.filter((l) => l.snapshotId === activeSnapshot.localId) : []),
     [locations, activeSnapshot]
   );
 
-  // Players visible in the Snapshots list (filtered by group or player selection)
   const filteredPlayers = useMemo(() => {
     if (activePlayerId) return players.filter((p) => p.localId === activePlayerId);
     if (activeGroupId) return players.filter((p) => p.groupId === activeGroupId);
     return players;
   }, [players, activePlayerId, activeGroupId]);
 
-  // Map pins: one per filtered player that has a location at this snapshot
+  const activePlayerObj = players.find((p) => p.localId === activePlayerId) ?? null;
+  const isCurrentPlayerBlocked = activePlayerObj ? isBlockedAtSnapshot(activeSnapshot, activePlayerObj) : false;
+  const isPlacing = !!activePlayerId && !!activeSnapshot && !isCurrentPlayerBlocked;
+
   const pins = useMemo<LocationPin[]>(() => {
     return filteredPlayers.flatMap((player) => {
       const loc = snapshotLocs.find((l) => l.playerId === player.localId);
@@ -133,11 +129,48 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
 
   function updateGroup(id: string, patch: Partial<MockGroup>) {
     setGroups((prev) => prev.map((g) => (g.localId === id ? { ...g, ...patch } : g)));
+
+    if ("teeTime" in patch) {
+      const newTeeTime = patch.teeTime ?? "";
+      const existingSnap = snapshots.find((s) => s.sourceGroupId === id);
+
+      if (!newTeeTime) {
+        // Tee time cleared — remove the auto-snapshot and its locations
+        if (existingSnap) {
+          setLocations((prev) => prev.filter((l) => l.snapshotId !== existingSnap.localId));
+          setSnapshots((prev) => {
+            const next = prev.filter((s) => s.localId !== existingSnap.localId);
+            setActiveSnapshotIdx((cur) => Math.min(cur, Math.max(0, next.length - 1)));
+            return next;
+          });
+        }
+      } else if (existingSnap) {
+        // Update the existing auto-snapshot's timestamp
+        setSnapshots((prev) => prev.map((s) => s.localId === existingSnap.localId ? { ...s, timestamp: newTeeTime } : s));
+      } else {
+        // Create a new auto-snapshot for this group's tee time
+        setSnapshots((prev) => [...prev, { localId: makeId(), timestamp: newTeeTime, sourceGroupId: id }]);
+      }
+    }
   }
 
   function removeGroup(id: string) {
+    const snap = snapshots.find((s) => s.sourceGroupId === id);
+    if (snap) {
+      setLocations((prev) => prev.filter((l) => l.snapshotId !== snap.localId));
+      setSnapshots((prev) => {
+        const next = prev.filter((s) => s.localId !== snap.localId);
+        setActiveSnapshotIdx((cur) => Math.min(cur, Math.max(0, next.length - 1)));
+        return next;
+      });
+    }
     setGroups((prev) => prev.filter((g) => g.localId !== id));
-    setPlayers((prev) => prev.map((p) => (p.groupId === id ? { ...p, groupId: null } : p)));
+    // Re-assign players to the first remaining group
+    setGroups((prev) => {
+      const firstRemaining = prev[0]?.localId ?? null;
+      setPlayers((pp) => pp.map((p) => (p.groupId === id ? { ...p, groupId: firstRemaining } : p)));
+      return prev;
+    });
     if (activeGroupId === id) setActiveGroupId(null);
   }
 
@@ -149,7 +182,11 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
   // ── Players ───────────────────────────────────────────────────
 
   function addPlayer() {
-    const p: MockPlayer = { localId: makeId(), name: `Player ${players.length + 1}`, groupId: null };
+    const p: MockPlayer = {
+      localId: makeId(),
+      name: `Player ${players.length + 1}`,
+      groupId: groups[0]?.localId ?? null,
+    };
     setPlayers((prev) => [...prev, p]);
   }
 
@@ -163,7 +200,8 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
     if (activePlayerId === id) setActivePlayerId(null);
   }
 
-  function togglePlayerSelect(id: string) {
+  function togglePlayerSelect(id: string, blocked: boolean) {
+    if (blocked) return;
     setActivePlayerId((prev) => (prev === id ? null : id));
     setActiveGroupId(null);
   }
@@ -173,9 +211,8 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
   function addSnapshot() {
     const lastTs = snapshots.length > 0 ? snapshots[snapshots.length - 1].timestamp : defaultTimestamp();
     const ts = snapshots.length > 0 ? advanceByMinutes(lastTs, 5) : lastTs;
-    const snap: Snapshot = { localId: makeId(), timestamp: ts };
     setSnapshots((prev) => {
-      const next = [...prev, snap];
+      const next = [...prev, { localId: makeId(), timestamp: ts, sourceGroupId: null }];
       setActiveSnapshotIdx(next.length - 1);
       return next;
     });
@@ -198,8 +235,7 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
   // ── Map click ─────────────────────────────────────────────────
 
   function handleMapClick(lat: number, lng: number) {
-    if (!activePlayerId || !activeSnapshot) return;
-    // Replace any existing location for this player at this snapshot
+    if (!isPlacing || !activePlayerId || !activeSnapshot) return;
     setLocations((prev) => [
       ...prev.filter((l) => !(l.snapshotId === activeSnapshot.localId && l.playerId === activePlayerId)),
       { localId: makeId(), snapshotId: activeSnapshot.localId, playerId: activePlayerId, lat, lng },
@@ -250,8 +286,12 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
     setTimeout(() => setCopied(false), 2000);
   }
 
-  const isPlacing = !!activePlayerId && !!activeSnapshot;
   const inputCls = "rounded border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-xs text-zinc-900 outline-none focus:border-zinc-400 focus:bg-white";
+
+  // Label to show next to snapshot in the scroller (group name if auto-created)
+  const activeSnapSourceGroup = activeSnapshot?.sourceGroupId
+    ? groups.find((g) => g.localId === activeSnapshot.sourceGroupId)
+    : null;
 
   return (
     <div className="flex min-h-0 flex-1 gap-4">
@@ -306,12 +346,12 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
                       className={`${inputCls} min-w-0 flex-1`}
                     />
                     <input
-                      type="time"
+                      type="datetime-local"
                       value={g.teeTime}
                       onChange={(e) => updateGroup(g.localId, { teeTime: e.target.value })}
                       onClick={(e) => e.stopPropagation()}
                       title="Tee time"
-                      className={`${inputCls} w-20 shrink-0`}
+                      className={`${inputCls} w-36 shrink-0`}
                     />
                     <button type="button" onClick={(e) => { e.stopPropagation(); removeGroup(g.localId); }} className="shrink-0 text-xs text-zinc-300 hover:text-red-500">✕</button>
                   </div>
@@ -337,7 +377,7 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
                 return (
                   <div
                     key={p.localId}
-                    onClick={() => togglePlayerSelect(p.localId)}
+                    onClick={() => togglePlayerSelect(p.localId, false)}
                     className={`flex cursor-pointer items-center gap-2 px-3 py-2 transition-colors ${isActive ? "bg-blue-50" : "hover:bg-zinc-50"}`}
                   >
                     <div className="h-2.5 w-2.5 shrink-0 rounded-full border border-white shadow-sm" style={{ background: color }} />
@@ -348,15 +388,16 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
                       placeholder="Name"
                       className={`${inputCls} min-w-0 flex-1 bg-transparent`}
                     />
-                    <select
-                      value={p.groupId ?? ""}
-                      onChange={(e) => { e.stopPropagation(); updatePlayer(p.localId, { groupId: e.target.value || null }); }}
-                      onClick={(e) => e.stopPropagation()}
-                      className={`${inputCls} w-24 shrink-0`}
-                    >
-                      <option value="">No group</option>
-                      {groups.map((g) => <option key={g.localId} value={g.localId}>{g.label || "Unnamed"}</option>)}
-                    </select>
+                    {groups.length > 0 && (
+                      <select
+                        value={p.groupId ?? ""}
+                        onChange={(e) => { e.stopPropagation(); updatePlayer(p.localId, { groupId: e.target.value || null }); }}
+                        onClick={(e) => e.stopPropagation()}
+                        className={`${inputCls} w-24 shrink-0`}
+                      >
+                        {groups.map((g) => <option key={g.localId} value={g.localId}>{g.label || "Unnamed"}</option>)}
+                      </select>
+                    )}
                     <button type="button" onClick={(e) => { e.stopPropagation(); removePlayer(p.localId); }} className="shrink-0 text-xs text-zinc-300 hover:text-red-500">✕</button>
                   </div>
                 );
@@ -373,10 +414,14 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
           </div>
 
           {snapshots.length === 0 ? (
-            <p className="px-4 py-3 text-xs text-zinc-400">No snapshots yet — click + Add to create one.</p>
+            <p className="px-4 py-3 text-xs text-zinc-400">
+              {groups.some((g) => g.teeTime)
+                ? "Tee time snapshots created. Add more or select one above."
+                : "Set group tee times or click + Add to create snapshots."}
+            </p>
           ) : (
             <>
-              {/* Timestamp scroller */}
+              {/* Scroller */}
               <div className="flex items-center gap-1 border-b border-zinc-100 px-2 py-2">
                 <button
                   type="button"
@@ -386,12 +431,19 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
                 >
                   ‹
                 </button>
-                <input
-                  type="datetime-local"
-                  value={activeSnapshot?.timestamp ?? ""}
-                  onChange={(e) => updateSnapshotTs(activeSnapshotIdx, e.target.value)}
-                  className={`${inputCls} min-w-0 flex-1`}
-                />
+                <div className="flex min-w-0 flex-1 flex-col">
+                  <input
+                    type="datetime-local"
+                    value={activeSnapshot?.timestamp ?? ""}
+                    onChange={(e) => updateSnapshotTs(activeSnapshotIdx, e.target.value)}
+                    className={`${inputCls} w-full`}
+                  />
+                  {activeSnapSourceGroup && (
+                    <span className="mt-0.5 truncate text-xs text-zinc-400">
+                      Tee time · {activeSnapSourceGroup.label}
+                    </span>
+                  )}
+                </div>
                 <button
                   type="button"
                   onClick={() => setActiveSnapshotIdx((i) => Math.min(snapshots.length - 1, i + 1))}
@@ -410,7 +462,7 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
                 </button>
               </div>
 
-              {/* Player rows for this snapshot */}
+              {/* Player rows */}
               {players.length === 0 ? (
                 <p className="px-4 py-3 text-xs text-zinc-400">Add players first.</p>
               ) : filteredPlayers.length === 0 ? (
@@ -418,17 +470,31 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
               ) : (
                 <div className="divide-y divide-zinc-100">
                   {filteredPlayers.map((player) => {
-                    const loc = snapshotLocs.find((l) => l.playerId === player.localId);
+                    const blocked = isBlockedAtSnapshot(activeSnapshot, player);
+                    const loc = blocked ? null : snapshotLocs.find((l) => l.playerId === player.localId);
                     const isActive = player.localId === activePlayerId;
                     return (
                       <div
                         key={player.localId}
-                        onClick={() => togglePlayerSelect(player.localId)}
-                        className={`flex cursor-pointer items-center gap-2 px-3 py-1.5 transition-colors ${isActive ? "bg-blue-50" : "hover:bg-zinc-50"}`}
+                        onClick={() => togglePlayerSelect(player.localId, blocked)}
+                        className={`flex items-center gap-2 px-3 py-1.5 transition-colors ${
+                          blocked
+                            ? "cursor-default opacity-40"
+                            : isActive
+                            ? "cursor-pointer bg-blue-50"
+                            : "cursor-pointer hover:bg-zinc-50"
+                        }`}
                       >
-                        <div className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: playerColor(player) }} />
-                        <span className="min-w-0 flex-1 truncate text-xs text-zinc-800">{player.name || "Player"}</span>
-                        {loc ? (
+                        <div
+                          className="h-2.5 w-2.5 shrink-0 rounded-full"
+                          style={{ background: blocked ? "#d1d5db" : playerColor(player) }}
+                        />
+                        <span className="min-w-0 flex-1 truncate text-xs text-zinc-800">
+                          {player.name || "Player"}
+                        </span>
+                        {blocked ? (
+                          <span className="shrink-0 text-xs text-zinc-300">before tee</span>
+                        ) : loc ? (
                           <>
                             <span className="shrink-0 font-mono text-xs text-zinc-500">
                               {loc.lat.toFixed(4)}, {loc.lng.toFixed(4)}
@@ -451,10 +517,10 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
               )}
 
               {/* Placement hint */}
-              {activePlayerId && activeSnapshot && (
+              {activePlayerId && activeSnapshot && !isCurrentPlayerBlocked && (
                 <div className="border-t border-blue-100 bg-blue-50 px-3 py-2">
                   <p className="text-xs text-blue-600">
-                    Click the map to place <strong>{players.find((p) => p.localId === activePlayerId)?.name ?? "player"}</strong>
+                    Click the map to place <strong>{activePlayerObj?.name ?? "player"}</strong>
                   </p>
                 </div>
               )}
