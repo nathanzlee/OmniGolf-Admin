@@ -1,8 +1,11 @@
 import AdminNav from "@/components/AdminNav";
 import ScriptTestingSubnav from "../ScriptTestingSubnav";
 import TestCaseBuilder from "./TestCaseBuilder";
+import { listCoursesForSelect } from "@/app/actions";
 
-export default function TestCaseBuilderPage() {
+export default async function TestCaseBuilderPage() {
+  const courseOptions = await listCoursesForSelect();
+
   return (
     <main className="h-screen overflow-hidden bg-zinc-50">
       <div className="mx-auto flex h-full max-w-6xl flex-col px-6 py-6">
@@ -16,7 +19,7 @@ export default function TestCaseBuilderPage() {
             Create groups and players, then click the map to place player locations with timestamps.
           </p>
         </div>
-        <TestCaseBuilder />
+        <TestCaseBuilder courseOptions={courseOptions} />
       </div>
     </main>
   );

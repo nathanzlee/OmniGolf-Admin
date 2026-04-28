@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useMemo, useState } from "react";
-import type { LocationPin } from "./TestCaseBuilderMap";
+import type { LocationPin, ViewTarget } from "./TestCaseBuilderMap";
 
 const TestCaseBuilderMap = dynamic(() => import("./TestCaseBuilderMap"), { ssr: false });
 
@@ -22,6 +22,11 @@ const UNASSIGNED_COLOR = "#6b7280";
 function makeId() {
   return Math.random().toString(36).slice(2);
 }
+
+type CourseOption = {
+  id: string;
+  name: string;
+};
 
 type MockGroup = {
   localId: string;
@@ -55,7 +60,12 @@ function advanceByMinutes(ts: string, minutes: number) {
   return d.toISOString().slice(0, 16);
 }
 
-export default function TestCaseBuilder() {
+export default function TestCaseBuilder({ courseOptions }: { courseOptions: CourseOption[] }) {
+  const [selectedCourseId, setSelectedCourseId] = useState<string>("");
+  const [selectedCourseName, setSelectedCourseName] = useState<string>("");
+  const [loadingCourse, setLoadingCourse] = useState(false);
+  const [viewTarget, setViewTarget] = useState<ViewTarget | null>(null);
+
   const [groups, setGroups] = useState<MockGroup[]>([]);
   const [players, setPlayers] = useState<MockPlayer[]>([]);
   const [locations, setLocations] = useState<MockLocation[]>([]);
@@ -105,6 +115,38 @@ export default function TestCaseBuilder() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [locations, players, activePlayerId, groupColorMap]);
 
+  // ── Course selection ──────────────────────────────────────────
+
+  async function handleCourseChange(courseId: string) {
+    setSelectedCourseId(courseId);
+    if (!courseId) {
+      setSelectedCourseName("");
+      return;
+    }
+    const opt = courseOptions.find((c) => c.id === courseId);
+    setSelectedCourseName(opt?.name ?? "");
+    setLoadingCourse(true);
+    try {
+      const res = await fetch(`/api/courses/${courseId}/data`);
+      const data = await res.json();
+      const holes: { teeLat: number; teeLng: number; greenLat: number; greenLng: number }[] =
+        data.holes ?? [];
+      const latlngs: [number, number][] = holes.flatMap((h) => [
+        [h.teeLat, h.teeLng] as [number, number],
+        [h.greenLat, h.greenLng] as [number, number],
+      ]);
+      if (latlngs.length > 0) {
+        setViewTarget({ key: Date.now(), latlngs });
+      }
+    } catch {
+      // ignore fetch errors
+    } finally {
+      setLoadingCourse(false);
+    }
+  }
+
+  // ── Groups ──────────────────────────────────────────────────
+
   function addGroup() {
     setGroups((prev) => [
       ...prev,
@@ -120,6 +162,8 @@ export default function TestCaseBuilder() {
     setGroups((prev) => prev.filter((g) => g.localId !== id));
     setPlayers((prev) => prev.map((p) => (p.groupId === id ? { ...p, groupId: null } : p)));
   }
+
+  // ── Players ─────────────────────────────────────────────────
 
   function addPlayer() {
     const p: MockPlayer = {
@@ -141,6 +185,8 @@ export default function TestCaseBuilder() {
     if (activePlayerId === id) setActivePlayerId(null);
   }
 
+  // ── Locations ────────────────────────────────────────────────
+
   function handleMapClick(lat: number, lng: number) {
     if (!activePlayerId) return;
     setLocations((prev) => [
@@ -158,6 +204,8 @@ export default function TestCaseBuilder() {
     setLocations((prev) => prev.filter((l) => l.localId !== id));
   }
 
+  // ── Export ───────────────────────────────────────────────────
+
   function buildSessionJson() {
     const byPlayer = new Map<string, MockLocation[]>();
     for (const loc of locations) {
@@ -170,8 +218,8 @@ export default function TestCaseBuilder() {
       exported_at: new Date().toISOString(),
       session_id: makeId(),
       session_name: "Mock Session",
-      course_id: "",
-      course_name: "",
+      course_id: selectedCourseId || "",
+      course_name: selectedCourseName || "",
       holes: [],
       course_landmarks: [],
       groups: groups.map((g) => ({
@@ -215,6 +263,31 @@ export default function TestCaseBuilder() {
     <div className="flex min-h-0 flex-1 gap-4">
       {/* Left panel */}
       <div className="flex w-80 shrink-0 flex-col gap-3 overflow-y-auto pr-1">
+
+        {/* Course */}
+        <div className="rounded-xl border border-zinc-200 bg-white shadow-sm">
+          <div className="border-b border-zinc-100 px-4 py-2.5">
+            <h2 className="text-sm font-semibold text-zinc-900">Course</h2>
+          </div>
+          <div className="px-3 py-2">
+            <select
+              value={selectedCourseId}
+              onChange={(e) => handleCourseChange(e.target.value)}
+              disabled={loadingCourse}
+              className={`${inputCls} w-full`}
+            >
+              <option value="">— Select a course —</option>
+              {courseOptions.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+            {loadingCourse && (
+              <p className="mt-1 text-xs text-zinc-400">Loading course…</p>
+            )}
+          </div>
+        </div>
 
         {/* Groups */}
         <div className="rounded-xl border border-zinc-200 bg-white shadow-sm">
@@ -439,6 +512,7 @@ export default function TestCaseBuilder() {
         <TestCaseBuilderMap
           pins={pins}
           isPlacing={!!activePlayerId}
+          viewTarget={viewTarget}
           onMapClick={handleMapClick}
         />
       </div>

@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect } from "react";
-import { MapContainer, TileLayer, Marker, Tooltip, useMapEvents } from "react-leaflet";
+import { useEffect, useRef } from "react";
+import { MapContainer, TileLayer, Marker, Tooltip, useMapEvents, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
@@ -13,6 +13,11 @@ export type LocationPin = {
   index: number;
   isActivePlayer: boolean;
   playerName: string;
+};
+
+export type ViewTarget = {
+  key: number;
+  latlngs: [number, number][];
 };
 
 function makeLocationIcon(color: string, index: number, isActivePlayer: boolean) {
@@ -27,6 +32,23 @@ function makeLocationIcon(color: string, index: number, isActivePlayer: boolean)
     iconSize: [size, size],
     iconAnchor: [anchor, anchor],
   });
+}
+
+function ViewHandler({ target }: { target: ViewTarget | null }) {
+  const map = useMap();
+  const prevKey = useRef(-1);
+
+  useEffect(() => {
+    if (!target || target.key === prevKey.current) return;
+    prevKey.current = target.key;
+    if (target.latlngs.length === 1) {
+      map.flyTo(target.latlngs[0], Math.max(map.getZoom(), 15), { animate: true, duration: 0.8 });
+    } else {
+      map.fitBounds(L.latLngBounds(target.latlngs), { padding: [60, 60], maxZoom: 17, animate: true });
+    }
+  }, [map, target]);
+
+  return null;
 }
 
 function ClickHandler({
@@ -47,10 +69,12 @@ function ClickHandler({
 export default function TestCaseBuilderMap({
   pins,
   isPlacing,
+  viewTarget,
   onMapClick,
 }: {
   pins: LocationPin[];
   isPlacing: boolean;
+  viewTarget?: ViewTarget | null;
   onMapClick: (lat: number, lng: number) => void;
 }) {
   useEffect(() => {
@@ -77,6 +101,7 @@ export default function TestCaseBuilderMap({
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
+        <ViewHandler target={viewTarget ?? null} />
         <ClickHandler active={isPlacing} onMapClick={onMapClick} />
         {pins.map((pin) => (
           <Marker
