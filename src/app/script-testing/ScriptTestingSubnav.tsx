@@ -23,6 +23,12 @@ export default function ScriptTestingSubnav() {
       >
         Test Cases
       </Link>
+      <Link
+        href="/script-testing/test-case-builder"
+        className={`${base} ${pathname.startsWith("/script-testing/test-case-builder") ? active : inactive}`}
+      >
+        Test Case Builder
+      </Link>
     </nav>
   );
 }
