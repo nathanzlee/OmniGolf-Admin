@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { LocationPin, ViewTarget } from "./TestCaseBuilderMap";
 
 const TestCaseBuilderMap = dynamic(() => import("./TestCaseBuilderMap"), { ssr: false });
@@ -11,16 +11,27 @@ const GROUP_COLORS = [
   "#ea580c", "#0891b2", "#be185d", "#ca8a04",
 ];
 const UNASSIGNED_COLOR = "#6b7280";
+const STORAGE_KEY = "test-case-builder-state-v1";
 
 function makeId() {
   return Math.random().toString(36).slice(2);
 }
 
 type CourseOption = { id: string; name: string };
-type MockGroup = { localId: string; label: string; teeTime: string }; // teeTime: datetime-local or ""
-type MockPlayer = { localId: string; name: string; groupId: string | null };
+type MockGroup = { localId: string; label: string; teeTime: string };
+type MockPlayer = { localId: string; name: string; groupId: string | null; usingCarts: boolean };
 type Snapshot = { localId: string; timestamp: string; sourceGroupId: string | null };
 type MockLocation = { localId: string; snapshotId: string; playerId: string; lat: number; lng: number };
+
+type SavedState = {
+  selectedCourseId: string;
+  selectedCourseName: string;
+  groups: MockGroup[];
+  players: MockPlayer[];
+  snapshots: Snapshot[];
+  locations: MockLocation[];
+  activeSnapshotIdx: number;
+};
 
 function defaultTimestamp() {
   const now = new Date();
@@ -49,8 +60,74 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
   const [activePlayerId, setActivePlayerId] = useState<string | null>(null);
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [hasRecent, setHasRecent] = useState(false);
 
+  const restoringRef = useRef(false);
   const activeSnapshot = snapshots[activeSnapshotIdx] ?? null;
+
+  // ── LocalStorage ──────────────────────────────────────────────
+
+  function applyState(saved: SavedState) {
+    if (saved.groups) setGroups(saved.groups);
+    if (saved.players) setPlayers(saved.players);
+    if (saved.snapshots) setSnapshots(saved.snapshots);
+    if (saved.locations) setLocations(saved.locations);
+    if (typeof saved.selectedCourseId === "string") setSelectedCourseId(saved.selectedCourseId);
+    if (typeof saved.selectedCourseName === "string") setSelectedCourseName(saved.selectedCourseName);
+    if (typeof saved.activeSnapshotIdx === "number") setActiveSnapshotIdx(saved.activeSnapshotIdx);
+    setActivePlayerId(null);
+    setActiveGroupId(null);
+  }
+
+  // Auto-load on mount
+  useEffect(() => {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    try {
+      restoringRef.current = true;
+      applyState(JSON.parse(raw) as SavedState);
+      setHasRecent(true);
+    } catch { /* ignore */ } finally {
+      setTimeout(() => { restoringRef.current = false; }, 0);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Auto-save on state changes
+  useEffect(() => {
+    if (restoringRef.current) return;
+    const payload: SavedState = {
+      selectedCourseId, selectedCourseName,
+      groups, players, snapshots, locations, activeSnapshotIdx,
+    };
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+    setHasRecent(true);
+  }, [selectedCourseId, selectedCourseName, groups, players, snapshots, locations, activeSnapshotIdx]);
+
+  function loadRecent() {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    try {
+      restoringRef.current = true;
+      applyState(JSON.parse(raw) as SavedState);
+    } catch { /* ignore */ } finally {
+      setTimeout(() => { restoringRef.current = false; }, 0);
+    }
+  }
+
+  function clearState() {
+    window.localStorage.removeItem(STORAGE_KEY);
+    setGroups([]);
+    setPlayers([]);
+    setSnapshots([]);
+    setLocations([]);
+    setSelectedCourseId("");
+    setSelectedCourseName("");
+    setActiveSnapshotIdx(0);
+    setActivePlayerId(null);
+    setActiveGroupId(null);
+    setHasRecent(false);
+  }
 
   // ── Derived ───────────────────────────────────────────────────
 
@@ -133,9 +210,7 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
     if ("teeTime" in patch) {
       const newTeeTime = patch.teeTime ?? "";
       const existingSnap = snapshots.find((s) => s.sourceGroupId === id);
-
       if (!newTeeTime) {
-        // Tee time cleared — remove the auto-snapshot and its locations
         if (existingSnap) {
           setLocations((prev) => prev.filter((l) => l.snapshotId !== existingSnap.localId));
           setSnapshots((prev) => {
@@ -145,10 +220,8 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
           });
         }
       } else if (existingSnap) {
-        // Update the existing auto-snapshot's timestamp
         setSnapshots((prev) => prev.map((s) => s.localId === existingSnap.localId ? { ...s, timestamp: newTeeTime } : s));
       } else {
-        // Create a new auto-snapshot for this group's tee time
         setSnapshots((prev) => [...prev, { localId: makeId(), timestamp: newTeeTime, sourceGroupId: id }]);
       }
     }
@@ -164,12 +237,11 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
         return next;
       });
     }
-    setGroups((prev) => prev.filter((g) => g.localId !== id));
-    // Re-assign players to the first remaining group
     setGroups((prev) => {
-      const firstRemaining = prev[0]?.localId ?? null;
-      setPlayers((pp) => pp.map((p) => (p.groupId === id ? { ...p, groupId: firstRemaining } : p)));
-      return prev;
+      const remaining = prev.filter((g) => g.localId !== id);
+      const firstId = remaining[0]?.localId ?? null;
+      setPlayers((pp) => pp.map((p) => (p.groupId === id ? { ...p, groupId: firstId } : p)));
+      return remaining;
     });
     if (activeGroupId === id) setActiveGroupId(null);
   }
@@ -182,12 +254,10 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
   // ── Players ───────────────────────────────────────────────────
 
   function addPlayer() {
-    const p: MockPlayer = {
-      localId: makeId(),
-      name: `Player ${players.length + 1}`,
-      groupId: groups[0]?.localId ?? null,
-    };
-    setPlayers((prev) => [...prev, p]);
+    setPlayers((prev) => [
+      ...prev,
+      { localId: makeId(), name: `Player ${prev.length + 1}`, groupId: groups[0]?.localId ?? null, usingCarts: false },
+    ]);
   }
 
   function updatePlayer(id: string, patch: Partial<MockPlayer>) {
@@ -266,7 +336,9 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
         group_id: g.localId,
         label: g.label,
         tee_time: g.teeTime || null,
-        players: players.filter((p) => p.groupId === g.localId).map((p) => ({ user_id: p.localId, using_carts: false })),
+        players: players
+          .filter((p) => p.groupId === g.localId)
+          .map((p) => ({ user_id: p.localId, using_carts: p.usingCarts })),
       })),
       players: players.map((p) => ({
         user_id: p.localId,
@@ -287,8 +359,6 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
   }
 
   const inputCls = "rounded border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-xs text-zinc-900 outline-none focus:border-zinc-400 focus:bg-white";
-
-  // Label to show next to snapshot in the scroller (group name if auto-created)
   const activeSnapSourceGroup = activeSnapshot?.sourceGroupId
     ? groups.find((g) => g.localId === activeSnapshot.sourceGroupId)
     : null;
@@ -370,7 +440,7 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
           {players.length === 0 ? (
             <p className="px-4 py-3 text-xs text-zinc-400">No players yet.</p>
           ) : (
-            <div className="max-h-40 divide-y divide-zinc-100 overflow-y-auto">
+            <div className="max-h-48 divide-y divide-zinc-100 overflow-y-auto">
               {players.map((p) => {
                 const color = playerColor(p);
                 const isActive = p.localId === activePlayerId;
@@ -378,7 +448,7 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
                   <div
                     key={p.localId}
                     onClick={() => togglePlayerSelect(p.localId, false)}
-                    className={`flex cursor-pointer items-center gap-2 px-3 py-2 transition-colors ${isActive ? "bg-blue-50" : "hover:bg-zinc-50"}`}
+                    className={`flex cursor-pointer items-center gap-1.5 px-3 py-2 transition-colors ${isActive ? "bg-blue-50" : "hover:bg-zinc-50"}`}
                   >
                     <div className="h-2.5 w-2.5 shrink-0 rounded-full border border-white shadow-sm" style={{ background: color }} />
                     <input
@@ -393,11 +463,24 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
                         value={p.groupId ?? ""}
                         onChange={(e) => { e.stopPropagation(); updatePlayer(p.localId, { groupId: e.target.value || null }); }}
                         onClick={(e) => e.stopPropagation()}
-                        className={`${inputCls} w-24 shrink-0`}
+                        className={`${inputCls} w-20 shrink-0`}
                       >
                         {groups.map((g) => <option key={g.localId} value={g.localId}>{g.label || "Unnamed"}</option>)}
                       </select>
                     )}
+                    <label
+                      className="flex shrink-0 cursor-pointer items-center gap-1"
+                      onClick={(e) => e.stopPropagation()}
+                      title="Using cart"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={p.usingCarts}
+                        onChange={(e) => updatePlayer(p.localId, { usingCarts: e.target.checked })}
+                        className="h-3 w-3 cursor-pointer rounded accent-zinc-600"
+                      />
+                      <span className="text-xs text-zinc-400">Cart</span>
+                    </label>
                     <button type="button" onClick={(e) => { e.stopPropagation(); removePlayer(p.localId); }} className="shrink-0 text-xs text-zinc-300 hover:text-red-500">✕</button>
                   </div>
                 );
@@ -415,9 +498,7 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
 
           {snapshots.length === 0 ? (
             <p className="px-4 py-3 text-xs text-zinc-400">
-              {groups.some((g) => g.teeTime)
-                ? "Tee time snapshots created. Add more or select one above."
-                : "Set group tee times or click + Add to create snapshots."}
+              Set group tee times or click + Add to create snapshots.
             </p>
           ) : (
             <>
@@ -478,10 +559,8 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
                         key={player.localId}
                         onClick={() => togglePlayerSelect(player.localId, blocked)}
                         className={`flex items-center gap-2 px-3 py-1.5 transition-colors ${
-                          blocked
-                            ? "cursor-default opacity-40"
-                            : isActive
-                            ? "cursor-pointer bg-blue-50"
+                          blocked ? "cursor-default opacity-40"
+                            : isActive ? "cursor-pointer bg-blue-50"
                             : "cursor-pointer hover:bg-zinc-50"
                         }`}
                       >
@@ -516,7 +595,6 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
                 </div>
               )}
 
-              {/* Placement hint */}
               {activePlayerId && activeSnapshot && !isCurrentPlayerBlocked && (
                 <div className="border-t border-blue-100 bg-blue-50 px-3 py-2">
                   <p className="text-xs text-blue-600">
@@ -528,8 +606,8 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
           )}
         </div>
 
-        {/* Export */}
-        <div className="pb-4">
+        {/* Export + session actions */}
+        <div className="flex flex-col gap-2 pb-4">
           <button
             type="button"
             onClick={copyJson}
@@ -538,7 +616,24 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
           >
             {copied ? "Copied!" : "Copy Session JSON"}
           </button>
-          <p className="mt-1.5 text-xs text-zinc-400">Paste into the Session Visualizer to preview.</p>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={loadRecent}
+              disabled={!hasRecent}
+              className="flex-1 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-sm hover:bg-zinc-50 disabled:opacity-40"
+            >
+              Load Recent
+            </button>
+            <button
+              type="button"
+              onClick={clearState}
+              className="flex-1 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-sm hover:bg-red-50 hover:text-red-600 hover:border-red-200"
+            >
+              Clear
+            </button>
+          </div>
+          <p className="text-xs text-zinc-400">Paste JSON into the Session Visualizer to preview.</p>
         </div>
       </div>
 
