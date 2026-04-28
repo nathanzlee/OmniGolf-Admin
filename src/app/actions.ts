@@ -560,7 +560,7 @@ export async function getSessionGroups(
 
   const { data, error } = await supabase
     .from("session_groups")
-    .select("id, label, tee_time, using_carts")
+    .select("id, label, tee_time")
     .eq("session_id", sessionId)
     .order("created_at", { ascending: true });
 
