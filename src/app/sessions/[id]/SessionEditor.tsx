@@ -284,8 +284,8 @@ export default function SessionEditor({
         if (g) {
           gs = gs.filter((x) => x.localId !== ev.groupId);
           gs.push(
-            { localId: `${ev.groupId}-a`, label: `${g.label}a`, teeTime: g.teeTime, playerUserIds: [] },
-            { localId: `${ev.groupId}-b`, label: `${g.label}b`, teeTime: g.teeTime, playerUserIds: [] }
+            { localId: `${ev.groupId}-a`, label: `${g.label}a`, teeTime: g.teeTime, players: [] },
+            { localId: `${ev.groupId}-b`, label: `${g.label}b`, teeTime: g.teeTime, players: [] }
           );
         }
       } else if (ev.eventType === "group join") {
