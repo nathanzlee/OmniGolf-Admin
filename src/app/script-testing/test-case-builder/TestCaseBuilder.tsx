@@ -797,6 +797,15 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
             onMapClick={handleMapClick}
             onViewChange={(center, zoom) => {
               mapViewRef.current = { center, zoom };
+              try {
+                const raw = window.localStorage.getItem(STORAGE_KEY);
+                if (raw) {
+                  const parsed = JSON.parse(raw);
+                  parsed.mapCenter = center;
+                  parsed.mapZoom = zoom;
+                  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
+                }
+              } catch { /* ignore */ }
             }}
           />
         )}
