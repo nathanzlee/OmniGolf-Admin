@@ -26,6 +26,10 @@ type MockPlayer = { localId: string; name: string; groupId: string | null; using
 type Snapshot = { localId: string; timestamp: string; sourceGroupId: string | null };
 type MockLocation = { localId: string; snapshotId: string; playerId: string; lat: number; lng: number };
 
+type CourseHole = { holeNumber: number; teeLat: number; teeLng: number; greenLat: number; greenLng: number; allottedTime: number };
+type CourseLandmark = { landmarkType: string; endpoint1Lat: number; endpoint1Lng: number; endpoint2Lat?: number; endpoint2Lng?: number };
+type CourseCartPath = { holeNumber: number; label: string | null; pathType: string; coordinates: { lat: number; lng: number }[] };
+
 type SavedState = {
   selectedCourseId: string;
   selectedCourseName: string;
@@ -34,6 +38,9 @@ type SavedState = {
   snapshots: Snapshot[];
   locations: MockLocation[];
   activeSnapshotIdx: number;
+  courseHoles?: CourseHole[];
+  courseLandmarks?: CourseLandmark[];
+  courseCartPaths?: CourseCartPath[];
 };
 
 function defaultTimestamp() {
@@ -53,6 +60,9 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
   const [selectedCourseName, setSelectedCourseName] = useState("");
   const [loadingCourse, setLoadingCourse] = useState(false);
   const [viewTarget, setViewTarget] = useState<ViewTarget | null>(null);
+  const [courseHoles, setCourseHoles] = useState<CourseHole[]>([]);
+  const [courseLandmarks, setCourseLandmarks] = useState<CourseLandmark[]>([]);
+  const [courseCartPaths, setCourseCartPaths] = useState<CourseCartPath[]>([]);
 
   const [groups, setGroups] = useState<MockGroup[]>([]);
   const [players, setPlayers] = useState<MockPlayer[]>([]);
@@ -78,6 +88,9 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
     if (typeof saved.selectedCourseId === "string") setSelectedCourseId(saved.selectedCourseId);
     if (typeof saved.selectedCourseName === "string") setSelectedCourseName(saved.selectedCourseName);
     if (typeof saved.activeSnapshotIdx === "number") setActiveSnapshotIdx(saved.activeSnapshotIdx);
+    if (saved.courseHoles) setCourseHoles(saved.courseHoles);
+    if (saved.courseLandmarks) setCourseLandmarks(saved.courseLandmarks);
+    if (saved.courseCartPaths) setCourseCartPaths(saved.courseCartPaths);
     setActivePlayerId(null);
     setActiveGroupId(null);
   }
@@ -102,6 +115,7 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
     const payload: SavedState = {
       selectedCourseId, selectedCourseName,
       groups, players, snapshots, locations, activeSnapshotIdx,
+      courseHoles, courseLandmarks, courseCartPaths,
     };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
     setHasRecent(true);
@@ -127,6 +141,9 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
     setSelectedCourseId("");
     setSelectedCourseName("");
     setActiveSnapshotIdx(0);
+    setCourseHoles([]);
+    setCourseLandmarks([]);
+    setCourseCartPaths([]);
     setActivePlayerId(null);
     setActiveGroupId(null);
     setHasRecent(false);
@@ -186,7 +203,13 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
 
   async function handleCourseChange(courseId: string) {
     setSelectedCourseId(courseId);
-    if (!courseId) { setSelectedCourseName(""); return; }
+    if (!courseId) {
+      setSelectedCourseName("");
+      setCourseHoles([]);
+      setCourseLandmarks([]);
+      setCourseCartPaths([]);
+      return;
+    }
     setSelectedCourseName(courseOptions.find((c) => c.id === courseId)?.name ?? "");
     setLoadingCourse(true);
     try {
@@ -198,6 +221,11 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
         ]
       );
       if (latlngs.length > 0) setViewTarget({ key: Date.now(), latlngs });
+      if (data.holes) setCourseHoles(data.holes);
+      if (data.landmarks) setCourseLandmarks(data.landmarks);
+      if (data.cartPaths) setCourseCartPaths(
+        (data.cartPaths as { holeNumber: number; label: string | null; pathType: string; coordinates: { lat: number; lng: number }[] }[])
+      );
     } catch { /* ignore */ } finally { setLoadingCourse(false); }
   }
 
@@ -326,19 +354,60 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
 
   function buildSessionJson() {
     const sorted = [...snapshots].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+
+    // Cart paths grouped by hole number
+    const cpByHole = new Map<number, CourseCartPath[]>();
+    for (const cp of courseCartPaths) {
+      if (!cpByHole.has(cp.holeNumber)) cpByHole.set(cp.holeNumber, []);
+      cpByHole.get(cp.holeNumber)!.push(cp);
+    }
+
     return {
       version: 1,
       exported_at: new Date().toISOString(),
       session_id: makeId(),
-      session_name: "Mock Session",
+      session_name: selectedCourseName ? `${selectedCourseName} Mock` : "Mock Session",
       course_id: selectedCourseId || "",
       course_name: selectedCourseName || "",
-      holes: [],
-      course_landmarks: [],
+      holes: courseHoles.map((h) => ({
+        hole_number: h.holeNumber,
+        tee_lat: h.teeLat,
+        tee_lng: h.teeLng,
+        green_lat: h.greenLat,
+        green_lng: h.greenLng,
+        allotted_time: h.allottedTime,
+        cart_paths: (cpByHole.get(h.holeNumber) ?? []).map((cp) => ({
+          label: cp.label ?? null,
+          path_type: cp.pathType,
+          coordinates: cp.coordinates,
+        })),
+      })),
+      course_landmarks: courseLandmarks.map((l) => {
+        if (l.landmarkType === "driving_range" && l.endpoint2Lat != null) {
+          const midLat = (l.endpoint1Lat + l.endpoint2Lat) / 2;
+          const midLng = (l.endpoint1Lng + (l.endpoint2Lng ?? l.endpoint1Lng)) / 2;
+          return {
+            id: makeId(),
+            landmark_type: l.landmarkType,
+            latitude: midLat,
+            longitude: midLng,
+            endpoint1_latitude: l.endpoint1Lat,
+            endpoint1_longitude: l.endpoint1Lng,
+            endpoint2_latitude: l.endpoint2Lat,
+            endpoint2_longitude: l.endpoint2Lng,
+          };
+        }
+        return {
+          id: makeId(),
+          landmark_type: l.landmarkType,
+          latitude: l.endpoint1Lat,
+          longitude: l.endpoint1Lng,
+        };
+      }),
       groups: groups.map((g) => ({
         group_id: g.localId,
         label: g.label,
-        tee_time: g.teeTime || null,
+        tee_time: g.teeTime ? new Date(g.teeTime).toISOString() : null,
         players: players
           .filter((p) => p.groupId === g.localId)
           .map((p) => ({ user_id: p.localId, using_carts: p.usingCarts })),
@@ -346,12 +415,15 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
       players: players.map((p) => ({
         user_id: p.localId,
         email: p.name || p.localId,
+        using_carts: p.usingCarts,
         locations: sorted.flatMap((snap) => {
           const loc = locations.find((l) => l.snapshotId === snap.localId && l.playerId === p.localId);
           if (!loc) return [];
           return [{ id: makeId(), recorded_at: new Date(snap.timestamp).toISOString(), latitude: loc.lat, longitude: loc.lng, horizontal_accuracy: null }];
         }),
       })),
+      group_pacing: [],
+      events: [],
     };
   }
 
