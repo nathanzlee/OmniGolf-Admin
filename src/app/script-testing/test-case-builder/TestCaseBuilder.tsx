@@ -485,7 +485,7 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
   return (
     <div className="flex min-h-0 flex-1 gap-4">
       {/* ── Left panel ── */}
-      <div className="flex w-80 shrink-0 flex-col gap-3 overflow-y-auto pr-1">
+      <div className="flex w-80 shrink-0 flex-col gap-3 pr-1">
 
         {/* Course */}
         <select
