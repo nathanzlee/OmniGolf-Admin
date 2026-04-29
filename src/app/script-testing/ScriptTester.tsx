@@ -254,10 +254,17 @@ function computeEventMetrics(
         let detail: string | null = null;
 
         if (isAssignment) {
-          const hit = assignmentCaught.find((c: any) =>
-            normalizeEventType(c.event ?? "") === evType &&
-            (c.group ?? "") === groupLabel
-          );
+          // Match by event type + group label (case-insensitive) OR hole number from landmark
+          const landmarkHole = ev.landmark?.startsWith?.("hole:")
+            ? parseInt(ev.landmark.split(":")[1], 10) : null;
+          const hit = assignmentCaught.find((c: any) => {
+            if (normalizeEventType(c.event ?? "") !== evType) return false;
+            const cGroup = (c.group ?? "").trim().toLowerCase();
+            const evGroup = (groupLabel ?? "").trim().toLowerCase();
+            if (cGroup && evGroup) return cGroup === evGroup;
+            if (landmarkHole != null && c.hole_number != null) return c.hole_number === landmarkHole;
+            return false;
+          });
           if (hit) {
             caught = true;
             if (hit.new_group1?.label && hit.new_group2?.label) {
@@ -267,10 +274,13 @@ function computeEventMetrics(
             }
           }
         } else if (isPacing) {
-          const hit = pacingCaught.find((c: any) =>
-            normalizeEventType(c.event_type ?? "") === evType &&
-            (c.group_id === groupId || c.group_label === groupLabel)
-          );
+          const hit = pacingCaught.find((c: any) => {
+            if (normalizeEventType(c.event_type ?? "") !== evType) return false;
+            if (groupId && c.group_id) return c.group_id === groupId;
+            const cLabel = (c.group_label ?? "").trim().toLowerCase();
+            const evLabel = (groupLabel ?? "").trim().toLowerCase();
+            return cLabel && evLabel ? cLabel === evLabel : false;
+          });
           if (hit) {
             caught = true;
             if (hit.hole != null) detail = `Hole ${hit.hole}`;
