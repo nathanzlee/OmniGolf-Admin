@@ -424,6 +424,50 @@ function PacingMetrics({ matches }: { matches: PacingMatchRow[] }) {
   );
 }
 
+function EventMetrics({ matches }: { matches: EventMatchRow[] }) {
+  if (matches.length === 0) return null;
+
+  const caughtCount = matches.filter((m) => m.caught).length;
+  const allCaught = caughtCount === matches.length;
+
+  return (
+    <div className="rounded-xl border border-zinc-200 bg-white shadow-sm">
+      <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3">
+        <h3 className="text-sm font-semibold text-zinc-900">Event Coverage</h3>
+        <span className={`text-xs font-medium ${allCaught ? "text-green-600" : "text-zinc-600"}`}>
+          {caughtCount}/{matches.length} events caught by script
+        </span>
+      </div>
+      <div className="max-h-56 overflow-auto">
+        <table className="w-full border-collapse">
+          <thead>
+            <tr className="sticky top-0 bg-zinc-50 text-xs font-semibold uppercase tracking-wide text-zinc-600">
+              <th className="border-b border-zinc-200 px-3 py-2 text-left">Event</th>
+              <th className="border-b border-zinc-200 px-3 py-2 text-left">Group</th>
+              <th className="border-b border-zinc-200 px-3 py-2 text-left">Landmark</th>
+              <th className="border-b border-zinc-200 px-3 py-2 text-left">Caught</th>
+              <th className="border-b border-zinc-200 px-3 py-2 text-left">Detail</th>
+            </tr>
+          </thead>
+          <tbody>
+            {matches.map((m, i) => (
+              <tr key={i} className="border-b border-zinc-100 last:border-0 text-sm text-zinc-800">
+                <td className="px-3 py-2 whitespace-nowrap capitalize">{m.eventType}</td>
+                <td className="px-3 py-2 whitespace-nowrap">{m.groupLabel ?? "—"}</td>
+                <td className="px-3 py-2 whitespace-nowrap">{m.landmark ?? "—"}</td>
+                <td className={`px-3 py-2 text-xs font-medium whitespace-nowrap ${m.caught ? "text-green-600" : "text-red-500"}`}>
+                  {m.caught ? "✓" : "✗"}
+                </td>
+                <td className="px-3 py-2 whitespace-nowrap text-zinc-500">{m.detail ?? "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function PacingScriptResultPanel({
   result,
   pacingMatches,
