@@ -37,7 +37,7 @@ type EventMatchRow = {
   eventType: string;
   groupLabel: string | null;
   landmark: string | null;
-  actualTime: string;
+  actualTime: string | null;
   detectedTime: string | null;
   deltaMin: number | null;
   match: boolean | null;
@@ -226,7 +226,6 @@ function computeEventMetrics(
   pacingResult: ScriptResult,
   sessionData: any
 ): { eventMatches: EventMatchRow[]; assignmentAnnotations: CsvAnnotations } {
-  if (storedEvents.length === 0) return { eventMatches: [], assignmentAnnotations: {} };
   try {
     const groupIdToLabel = new Map<string, string>(
       (sessionData.groups ?? []).map((g: any) => [
@@ -245,96 +244,146 @@ function computeEventMetrics(
     const groupChangesContent = assignmentCsvMap.get("input_group_changes.csv") ?? null;
     const groupChanges = groupChangesContent ? parseCSV(groupChangesContent) : null;
 
-    const matches: EventMatchRow[] = [];
     const annotations: CsvAnnotations = {};
-
     const addAnnotation = (filename: string, ts: string, ann: RowAnnotation) => {
       if (!annotations[filename]) annotations[filename] = {};
       if (!annotations[filename][ts]) annotations[filename][ts] = [];
       annotations[filename][ts].push(ann);
     };
 
-    for (const ev of storedEvents) {
-      const groupLabel = ev.groupId ? (groupIdToLabel.get(ev.groupId) ?? null) : null;
-      const isAssignmentEvent = ev.eventType === "group split" || ev.eventType === "group join";
-      const isPacingEvent = ev.eventType === "behind pace" || ev.eventType === "leave course";
+    // ── If we have stored expected events, match them against script output ──
+    if (storedEvents.length > 0) {
+      const matches: EventMatchRow[] = [];
+      for (const ev of storedEvents) {
+        const groupLabel = ev.groupId ? (groupIdToLabel.get(ev.groupId) ?? null) : null;
+        const isAssignmentEvent = ev.eventType === "group split" || ev.eventType === "group join";
+        const isPacingEvent = ev.eventType === "behind pace" || ev.eventType === "leave course";
 
-      let detectedTime: string | null = null;
-      let deltaMin: number | null = null;
-      let match: boolean | null = null;
-      let sourceFile: string | null = null;
+        let detectedTime: string | null = null;
+        let deltaMin: number | null = null;
+        let match: boolean | null = null;
+        let sourceFile: string | null = null;
 
-      if (isAssignmentEvent && groupChanges) {
-        const { headers, rows: csvRows } = groupChanges;
-        const tsCol = headers.findIndex((h) => h === "timestamp" || h === "time");
-        const typeCol = headers.findIndex((h) => h === "event_type" || h === "type");
-        if (tsCol !== -1) {
-          const keyword = ev.eventType === "group split" ? "split" : "join";
-          const candidates = typeCol !== -1
-            ? csvRows.filter((r) => r[typeCol]?.toLowerCase().includes(keyword))
-            : csvRows;
-          let best = Infinity;
-          for (const r of candidates) {
-            const ts = r[tsCol];
-            if (!ts || !ev.time) continue;
-            const d = absDiffMin(ev.time, ts);
-            if (d < best) { best = d; detectedTime = ts; }
+        if (isAssignmentEvent && groupChanges) {
+          const { headers, rows: csvRows } = groupChanges;
+          const tsCol = headers.findIndex((h) => h === "timestamp" || h === "time");
+          const typeCol = headers.findIndex((h) => h === "event_type" || h === "type");
+          if (tsCol !== -1) {
+            const keyword = ev.eventType === "group split" ? "split" : "join";
+            const candidates = typeCol !== -1
+              ? csvRows.filter((r) => r[typeCol]?.toLowerCase().includes(keyword))
+              : csvRows;
+            let best = Infinity;
+            for (const r of candidates) {
+              const ts = r[tsCol];
+              if (!ts || !ev.time) continue;
+              const d = absDiffMin(ev.time, ts);
+              if (d < best) { best = d; detectedTime = ts; }
+            }
+            if (detectedTime) {
+              deltaMin = best;
+              match = best <= MATCH_THRESHOLD_MIN;
+              sourceFile = "input_group_changes.csv";
+            }
           }
-          if (detectedTime) {
-            deltaMin = best;
-            match = best <= MATCH_THRESHOLD_MIN;
-            sourceFile = "input_group_changes.csv";
+        } else if (isPacingEvent) {
+          const keyword = ev.eventType === "behind pace" ? "behind" : "left";
+          outer: for (const [filename, csvContent] of pacingCsvMap) {
+            const { headers, rows: csvRows } = parseCSV(csvContent);
+            const tsCol = headers.findIndex((h) => h === "timestamp" || h === "time");
+            const typeCol = headers.findIndex(
+              (h) => h === "event_type" || h === "type" || h === "status"
+            );
+            if (tsCol === -1 || typeCol === -1) continue;
+            const candidates = csvRows.filter((r) =>
+              r[typeCol]?.toLowerCase().includes(keyword)
+            );
+            let best = Infinity;
+            let found: string | null = null;
+            for (const r of candidates) {
+              const ts = r[tsCol];
+              if (!ts || !ev.time) continue;
+              const d = absDiffMin(ev.time, ts);
+              if (d < best) { best = d; found = ts; }
+            }
+            if (found) {
+              detectedTime = found;
+              deltaMin = best;
+              match = best <= MATCH_THRESHOLD_MIN;
+              sourceFile = filename;
+              break outer;
+            }
           }
         }
-      } else if (isPacingEvent) {
-        const keyword = ev.eventType === "behind pace" ? "behind" : "left";
-        outer: for (const [filename, csvContent] of pacingCsvMap) {
-          const { headers, rows: csvRows } = parseCSV(csvContent);
-          const tsCol = headers.findIndex((h) => h === "timestamp" || h === "time");
-          const typeCol = headers.findIndex(
-            (h) => h === "event_type" || h === "type" || h === "status"
-          );
-          if (tsCol === -1 || typeCol === -1) continue;
-          const candidates = csvRows.filter((r) =>
-            r[typeCol]?.toLowerCase().includes(keyword)
-          );
-          let best = Infinity;
-          let found: string | null = null;
-          for (const r of candidates) {
-            const ts = r[tsCol];
-            if (!ts || !ev.time) continue;
-            const d = absDiffMin(ev.time, ts);
-            if (d < best) { best = d; found = ts; }
-          }
-          if (found) {
-            detectedTime = found;
-            deltaMin = best;
-            match = best <= MATCH_THRESHOLD_MIN;
-            sourceFile = filename;
-            break outer;
-          }
+
+        matches.push({
+          eventType: ev.eventType,
+          groupLabel,
+          landmark: ev.landmark || null,
+          actualTime: ev.time || null,
+          detectedTime,
+          deltaMin,
+          match,
+        });
+
+        if (detectedTime && sourceFile) {
+          addAnnotation(sourceFile, detectedTime, { label: ev.eventType, match: match ?? false });
         }
       }
+      return { eventMatches: matches, assignmentAnnotations: annotations };
+    }
 
-      matches.push({
-        eventType: ev.eventType,
-        groupLabel,
-        landmark: ev.landmark || null,
-        actualTime: ev.time || "",
-        detectedTime,
-        deltaMin,
-        match,
-      });
+    // ── No stored events: extract detected events directly from script output ──
+    const detected: EventMatchRow[] = [];
 
-      if (detectedTime && sourceFile) {
-        addAnnotation(sourceFile, detectedTime, {
-          label: ev.eventType,
-          match: match ?? false,
+    // From input_group_changes.csv
+    if (groupChanges) {
+      const { headers, rows: csvRows } = groupChanges;
+      const tsCol = headers.findIndex((h) => h === "timestamp" || h === "time");
+      const typeCol = headers.findIndex((h) => h === "event_type" || h === "type");
+      const groupCol = headers.findIndex(
+        (h) => h === "group_label" || h === "group" || h === "group_id"
+      );
+      for (const r of csvRows) {
+        const ts = tsCol !== -1 ? r[tsCol] : null;
+        const evType = typeCol !== -1 ? r[typeCol] : "group change";
+        const grp = groupCol !== -1 ? r[groupCol] : null;
+        detected.push({
+          eventType: evType ?? "group change",
+          groupLabel: grp ?? null,
+          landmark: null,
+          actualTime: null,
+          detectedTime: ts ?? null,
+          deltaMin: null,
+          match: null,
         });
       }
     }
 
-    return { eventMatches: matches, assignmentAnnotations: annotations };
+    // From pacing CSVs: rows that look like non-hole events
+    for (const [, csvContent] of pacingCsvMap) {
+      const { headers, rows: csvRows } = parseCSV(csvContent);
+      const tsCol = headers.findIndex((h) => h === "timestamp" || h === "time");
+      const typeCol = headers.findIndex(
+        (h) => h === "event_type" || h === "type" || h === "status"
+      );
+      if (tsCol === -1 || typeCol === -1) continue;
+      for (const r of csvRows) {
+        const evType = r[typeCol]?.toLowerCase() ?? "";
+        if (!evType.includes("behind") && !evType.includes("left") && !evType.includes("off")) continue;
+        detected.push({
+          eventType: r[typeCol] ?? "event",
+          groupLabel: null,
+          landmark: null,
+          actualTime: null,
+          detectedTime: r[tsCol] ?? null,
+          deltaMin: null,
+          match: null,
+        });
+      }
+    }
+
+    return { eventMatches: detected, assignmentAnnotations: annotations };
   } catch {
     return { eventMatches: [], assignmentAnnotations: {} };
   }
@@ -637,6 +686,7 @@ function PacingScriptResultPanel({
 function EventMetrics({ matches }: { matches: EventMatchRow[] }) {
   if (matches.length === 0) return null;
 
+  const hasExpected = matches.some((m) => m.actualTime !== null);
   const checked = matches.filter((m) => m.match !== null);
   const matched = checked.filter((m) => m.match).length;
   const allGood = matched === checked.length && checked.length > 0;
@@ -645,8 +695,10 @@ function EventMetrics({ matches }: { matches: EventMatchRow[] }) {
     <div className="rounded-xl border border-zinc-200 bg-white shadow-sm">
       <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3">
         <h3 className="text-sm font-semibold text-zinc-900">Event Coverage</h3>
-        <span className={`text-xs font-medium ${allGood ? "text-green-600" : "text-zinc-600"}`}>
-          {matched}/{checked.length} events accounted for (±{MATCH_THRESHOLD_MIN} min)
+        <span className={`text-xs font-medium ${hasExpected ? (allGood ? "text-green-600" : "text-zinc-600") : "text-zinc-500"}`}>
+          {hasExpected
+            ? `${matched}/${checked.length} events accounted for (±${MATCH_THRESHOLD_MIN} min)`
+            : `${matches.length} event${matches.length === 1 ? "" : "s"} detected`}
         </span>
       </div>
       <div className="max-h-56 overflow-auto">
@@ -655,10 +707,10 @@ function EventMetrics({ matches }: { matches: EventMatchRow[] }) {
             <tr className="sticky top-0 bg-zinc-50 text-xs font-semibold uppercase tracking-wide text-zinc-600">
               <th className="border-b border-zinc-200 px-3 py-2 text-left">Event</th>
               <th className="border-b border-zinc-200 px-3 py-2 text-left">Group</th>
-              <th className="border-b border-zinc-200 px-3 py-2 text-left">Landmark</th>
-              <th className="border-b border-zinc-200 px-3 py-2 text-left">Actual Time</th>
+              {hasExpected && <th className="border-b border-zinc-200 px-3 py-2 text-left">Landmark</th>}
+              {hasExpected && <th className="border-b border-zinc-200 px-3 py-2 text-left">Expected Time</th>}
               <th className="border-b border-zinc-200 px-3 py-2 text-left">Detected Time</th>
-              <th className="border-b border-zinc-200 px-3 py-2 text-left">Δ</th>
+              {hasExpected && <th className="border-b border-zinc-200 px-3 py-2 text-left">Δ</th>}
             </tr>
           </thead>
           <tbody>
@@ -666,10 +718,10 @@ function EventMetrics({ matches }: { matches: EventMatchRow[] }) {
               <tr key={i} className="border-b border-zinc-100 last:border-0 text-sm text-zinc-800">
                 <td className="px-3 py-2 whitespace-nowrap capitalize">{m.eventType}</td>
                 <td className="px-3 py-2 whitespace-nowrap">{m.groupLabel ?? "—"}</td>
-                <td className="px-3 py-2 whitespace-nowrap">{m.landmark ?? "—"}</td>
-                <td className="px-3 py-2 whitespace-nowrap">{m.actualTime || "—"}</td>
+                {hasExpected && <td className="px-3 py-2 whitespace-nowrap">{m.landmark ?? "—"}</td>}
+                {hasExpected && <td className="px-3 py-2 whitespace-nowrap">{m.actualTime ?? "—"}</td>}
                 <td className="px-3 py-2 whitespace-nowrap">{m.detectedTime ?? "—"}</td>
-                <DeltaCell deltaMin={m.deltaMin} match={m.match} />
+                {hasExpected && <DeltaCell deltaMin={m.deltaMin} match={m.match} />}
               </tr>
             ))}
           </tbody>
