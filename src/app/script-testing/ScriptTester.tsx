@@ -437,6 +437,8 @@ function PacingScriptResultPanel({
   if (!result) return null;
 
   const csvFiles = result.csvFiles ?? [];
+  const jsonFiles = result.jsonFiles ?? [];
+  const allFiles: CsvResult[] = [...csvFiles, ...jsonFiles];
 
   if (result.error) {
     return (
@@ -452,12 +454,12 @@ function PacingScriptResultPanel({
     );
   }
 
-  if (csvFiles.length === 0) {
+  if (allFiles.length === 0) {
     return (
       <div className="space-y-3">
         <PacingMetrics matches={pacingMatches} />
         <div className="rounded-xl border border-zinc-200 bg-white p-4 text-sm text-zinc-500">
-          Script ran successfully but produced no CSV files.
+          Script ran successfully but produced no output files.
           {result.stdout && (
             <pre className="mt-2 whitespace-pre-wrap font-mono text-xs text-zinc-700">
               {result.stdout}
@@ -468,9 +470,10 @@ function PacingScriptResultPanel({
     );
   }
 
-  const currentFile = csvFiles[activeTab];
-  const { headers, rows } = parseCSV(currentFile?.content ?? "");
-  const fileAnnotations = csvAnnotations[currentFile?.name ?? ""] ?? {};
+  const currentFile = allFiles[Math.min(activeTab, allFiles.length - 1)];
+  const isJson = currentFile?.name.endsWith(".json");
+  const { headers, rows } = isJson ? { headers: [] as string[], rows: [] as string[][] } : parseCSV(currentFile?.content ?? "");
+  const fileAnnotations = isJson ? {} : (csvAnnotations[currentFile?.name ?? ""] ?? {});
   const tsIdx = headers.indexOf("timestamp");
   const hasAnnotations = Object.keys(fileAnnotations).length > 0;
 
@@ -479,7 +482,7 @@ function PacingScriptResultPanel({
       <PacingMetrics matches={pacingMatches} />
       <div className="rounded-xl border border-zinc-200 bg-white shadow-sm">
         <div className="flex flex-wrap gap-1 border-b border-zinc-200 px-4 pt-3">
-          {csvFiles.map((f, i) => (
+          {allFiles.map((f, i) => (
             <button
               key={f.name}
               type="button"
@@ -495,7 +498,11 @@ function PacingScriptResultPanel({
           ))}
         </div>
         <div className="max-h-[55vh] overflow-auto p-4">
-          {headers.length === 0 ? (
+          {isJson ? (
+            <pre className="whitespace-pre-wrap font-mono text-xs text-zinc-800">
+              {(() => { try { return JSON.stringify(JSON.parse(currentFile.content), null, 2); } catch { return currentFile.content; } })()}
+            </pre>
+          ) : headers.length === 0 ? (
             <p className="text-sm text-zinc-500">CSV is empty.</p>
           ) : (
             <table className="w-full border-collapse text-sm">
@@ -579,51 +586,6 @@ function PacingScriptResultPanel({
   );
 }
 
-function EventMetrics({ matches }: { matches: EventMatchRow[] }) {
-  if (matches.length === 0) return null;
-
-  const caughtCount = matches.filter((m) => m.caught).length;
-  const allCaught = caughtCount === matches.length;
-
-  return (
-    <div className="rounded-xl border border-zinc-200 bg-white shadow-sm">
-      <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3">
-        <h3 className="text-sm font-semibold text-zinc-900">Event Coverage</h3>
-        <span className={`text-xs font-medium ${allCaught ? "text-green-600" : "text-zinc-600"}`}>
-          {caughtCount}/{matches.length} events caught by script
-        </span>
-      </div>
-      <div className="max-h-56 overflow-auto">
-        <table className="w-full border-collapse">
-          <thead>
-            <tr className="sticky top-0 bg-zinc-50 text-xs font-semibold uppercase tracking-wide text-zinc-600">
-              <th className="border-b border-zinc-200 px-3 py-2 text-left">Event</th>
-              <th className="border-b border-zinc-200 px-3 py-2 text-left">Group</th>
-              <th className="border-b border-zinc-200 px-3 py-2 text-left">Landmark</th>
-              <th className="border-b border-zinc-200 px-3 py-2 text-left">Caught</th>
-              <th className="border-b border-zinc-200 px-3 py-2 text-left">Detail</th>
-            </tr>
-          </thead>
-          <tbody>
-            {matches.map((m, i) => (
-              <tr key={i} className="border-b border-zinc-100 last:border-0 text-sm text-zinc-800">
-                <td className="px-3 py-2 whitespace-nowrap capitalize">{m.eventType}</td>
-                <td className="px-3 py-2 whitespace-nowrap">{m.groupLabel ?? "—"}</td>
-                <td className="px-3 py-2 whitespace-nowrap">{m.landmark ?? "—"}</td>
-                <td className={`px-3 py-2 text-xs font-medium whitespace-nowrap ${m.caught ? "text-green-600" : "text-red-500"}`}>
-                  {m.caught ? "✓" : "✗"}
-                </td>
-                <td className="px-3 py-2 whitespace-nowrap text-zinc-500">{m.detail ?? "—"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-
 function AssignmentScriptResultPanel({
   result,
   eventMatches,
@@ -639,6 +601,8 @@ function AssignmentScriptResultPanel({
   const csvFiles = (result.csvFiles ?? []).filter(
     (f) => f.name === "input_teeoff_gatherings.csv"
   );
+  const jsonFiles = result.jsonFiles ?? [];
+  const allFiles: CsvResult[] = [...csvFiles, ...jsonFiles];
 
   if (result.error) {
     return (
@@ -654,12 +618,12 @@ function AssignmentScriptResultPanel({
     );
   }
 
-  if (csvFiles.length === 0) {
+  if (allFiles.length === 0) {
     return (
       <div className="space-y-3">
         <EventMetrics matches={eventMatches} />
         <div className="rounded-xl border border-zinc-200 bg-white p-4 text-sm text-zinc-500">
-          Script ran successfully but produced no CSV files.
+          Script ran successfully but produced no output files.
           {result.stdout && (
             <pre className="mt-2 whitespace-pre-wrap font-mono text-xs text-zinc-700">
               {result.stdout}
@@ -670,9 +634,10 @@ function AssignmentScriptResultPanel({
     );
   }
 
-  const currentFile = csvFiles[activeTab];
-  const { headers, rows } = parseCSV(currentFile?.content ?? "");
-  const fileAnnotations = assignmentAnnotations[currentFile?.name ?? ""] ?? {};
+  const currentFile = allFiles[Math.min(activeTab, allFiles.length - 1)];
+  const isJson = currentFile?.name.endsWith(".json");
+  const { headers, rows } = isJson ? { headers: [] as string[], rows: [] as string[][] } : parseCSV(currentFile?.content ?? "");
+  const fileAnnotations = isJson ? {} : (assignmentAnnotations[currentFile?.name ?? ""] ?? {});
   const tsIdx = headers.findIndex((h) => h === "timestamp" || h === "time");
   const hasAnnotations = Object.keys(fileAnnotations).length > 0;
 
@@ -681,7 +646,7 @@ function AssignmentScriptResultPanel({
       <EventMetrics matches={eventMatches} />
       <div className="rounded-xl border border-zinc-200 bg-white shadow-sm">
         <div className="flex flex-wrap gap-1 border-b border-zinc-200 px-4 pt-3">
-          {csvFiles.map((f, i) => (
+          {allFiles.map((f, i) => (
             <button
               key={f.name}
               type="button"
@@ -697,7 +662,11 @@ function AssignmentScriptResultPanel({
           ))}
         </div>
         <div className="max-h-[55vh] overflow-auto p-4">
-          {headers.length === 0 ? (
+          {isJson ? (
+            <pre className="whitespace-pre-wrap font-mono text-xs text-zinc-800">
+              {(() => { try { return JSON.stringify(JSON.parse(currentFile.content), null, 2); } catch { return currentFile.content; } })()}
+            </pre>
+          ) : headers.length === 0 ? (
             <p className="text-sm text-zinc-500">CSV is empty.</p>
           ) : (
             <table className="w-full border-collapse text-sm">
