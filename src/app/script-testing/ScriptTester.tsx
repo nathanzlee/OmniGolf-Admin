@@ -283,31 +283,7 @@ function computeEventMetrics(
       return { eventMatches: matches, assignmentAnnotations: {} };
     }
 
-    // ── No expected events: show everything that was caught ───────────────────
-    const detected: EventMatchRow[] = [];
-    for (const c of assignmentCaught) {
-      let detail: string | null = null;
-      if (c.new_group1?.label && c.new_group2?.label) detail = `→ ${c.new_group1.label}, ${c.new_group2.label}`;
-      else if (c.new_group1?.label) detail = `→ ${c.new_group1.label}`;
-      detected.push({
-        eventType: c.event ?? "group change",
-        groupLabel: c.group ?? null,
-        landmark: c.hole_number != null ? `Hole ${c.hole_number}` : null,
-        caught: true,
-        detail,
-      });
-    }
-    for (const c of pacingCaught) {
-      detected.push({
-        eventType: c.event_type ?? "event",
-        groupLabel: c.group_label ?? null,
-        landmark: c.hole != null ? `Hole ${c.hole}` : null,
-        caught: true,
-        detail: null,
-      });
-    }
-
-    return { eventMatches: detected, assignmentAnnotations: {} };
+    return { eventMatches: [], assignmentAnnotations: {} };
   } catch {
     return { eventMatches: [], assignmentAnnotations: {} };
   }
@@ -606,20 +582,15 @@ function PacingScriptResultPanel({
 function EventMetrics({ matches }: { matches: EventMatchRow[] }) {
   if (matches.length === 0) return null;
 
-  const hasExpected = matches.some((m) => !m.caught || matches.some((x) => !x.caught));
   const caughtCount = matches.filter((m) => m.caught).length;
   const allCaught = caughtCount === matches.length;
-  // Determine if this is a comparison (session has expected events) or detected-only
-  const isComparison = matches.some((m) => !m.caught) || (matches.length > 0 && hasExpected);
 
   return (
     <div className="rounded-xl border border-zinc-200 bg-white shadow-sm">
       <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3">
         <h3 className="text-sm font-semibold text-zinc-900">Event Coverage</h3>
-        <span className={`text-xs font-medium ${allCaught && isComparison ? "text-green-600" : "text-zinc-600"}`}>
-          {isComparison
-            ? `${caughtCount}/${matches.length} events caught by script`
-            : `${matches.length} event${matches.length === 1 ? "" : "s"} detected`}
+        <span className={`text-xs font-medium ${allCaught ? "text-green-600" : "text-zinc-600"}`}>
+          {caughtCount}/{matches.length} events caught by script
         </span>
       </div>
       <div className="max-h-56 overflow-auto">
@@ -629,7 +600,7 @@ function EventMetrics({ matches }: { matches: EventMatchRow[] }) {
               <th className="border-b border-zinc-200 px-3 py-2 text-left">Event</th>
               <th className="border-b border-zinc-200 px-3 py-2 text-left">Group</th>
               <th className="border-b border-zinc-200 px-3 py-2 text-left">Landmark</th>
-              {isComparison && <th className="border-b border-zinc-200 px-3 py-2 text-left">Caught</th>}
+              <th className="border-b border-zinc-200 px-3 py-2 text-left">Caught</th>
               <th className="border-b border-zinc-200 px-3 py-2 text-left">Detail</th>
             </tr>
           </thead>
@@ -639,11 +610,9 @@ function EventMetrics({ matches }: { matches: EventMatchRow[] }) {
                 <td className="px-3 py-2 whitespace-nowrap capitalize">{m.eventType}</td>
                 <td className="px-3 py-2 whitespace-nowrap">{m.groupLabel ?? "—"}</td>
                 <td className="px-3 py-2 whitespace-nowrap">{m.landmark ?? "—"}</td>
-                {isComparison && (
-                  <td className={`px-3 py-2 text-xs font-medium whitespace-nowrap ${m.caught ? "text-green-600" : "text-red-500"}`}>
-                    {m.caught ? "✓" : "✗"}
-                  </td>
-                )}
+                <td className={`px-3 py-2 text-xs font-medium whitespace-nowrap ${m.caught ? "text-green-600" : "text-red-500"}`}>
+                  {m.caught ? "✓" : "✗"}
+                </td>
                 <td className="px-3 py-2 whitespace-nowrap text-zinc-500">{m.detail ?? "—"}</td>
               </tr>
             ))}
