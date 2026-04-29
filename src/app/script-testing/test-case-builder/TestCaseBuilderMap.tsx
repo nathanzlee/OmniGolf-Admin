@@ -47,6 +47,21 @@ function ViewHandler({ target }: { target: ViewTarget | null }) {
   return null;
 }
 
+function MoveHandler({
+  onViewChange,
+}: {
+  onViewChange?: (center: [number, number], zoom: number) => void;
+}) {
+  useMapEvents({
+    moveend(e) {
+      const map = e.target as L.Map;
+      const c = map.getCenter();
+      onViewChange?.([c.lat, c.lng], map.getZoom());
+    },
+  });
+  return null;
+}
+
 function ClickHandler({
   active,
   onMapClick,
