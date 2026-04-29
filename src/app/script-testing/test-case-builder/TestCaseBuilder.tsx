@@ -41,6 +41,8 @@ type SavedState = {
   courseHoles?: CourseHole[];
   courseLandmarks?: CourseLandmark[];
   courseCartPaths?: CourseCartPath[];
+  mapCenter?: [number, number];
+  mapZoom?: number;
 };
 
 function defaultTimestamp() {
@@ -76,6 +78,9 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
 
   const router = useRouter();
   const restoringRef = useRef(false);
+  const mapViewRef = useRef<{ center: [number, number]; zoom: number }>({ center: [39.5, -98.35], zoom: 4 });
+  const [mapInitView, setMapInitView] = useState<{ center: [number, number]; zoom: number } | null>(null);
+  const [mapReady, setMapReady] = useState(false);
   const activeSnapshot = snapshots[activeSnapshotIdx] ?? null;
 
   // ── LocalStorage ──────────────────────────────────────────────
@@ -91,6 +96,10 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
     if (saved.courseHoles) setCourseHoles(saved.courseHoles);
     if (saved.courseLandmarks) setCourseLandmarks(saved.courseLandmarks);
     if (saved.courseCartPaths) setCourseCartPaths(saved.courseCartPaths);
+    if (saved.mapCenter && saved.mapZoom != null) {
+      mapViewRef.current = { center: saved.mapCenter, zoom: saved.mapZoom };
+      setMapInitView({ center: saved.mapCenter, zoom: saved.mapZoom });
+    }
     setActivePlayerId(null);
     setActiveGroupId(null);
   }
@@ -98,13 +107,16 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
   // Auto-load on mount
   useEffect(() => {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return;
+    if (!raw) {
+      setMapReady(true);
+      return;
+    }
     try {
       restoringRef.current = true;
       applyState(JSON.parse(raw) as SavedState);
       setHasRecent(true);
     } catch { /* ignore */ } finally {
-      setTimeout(() => { restoringRef.current = false; }, 0);
+      setTimeout(() => { restoringRef.current = false; setMapReady(true); }, 0);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -116,6 +128,8 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
       selectedCourseId, selectedCourseName,
       groups, players, snapshots, locations, activeSnapshotIdx,
       courseHoles, courseLandmarks, courseCartPaths,
+      mapCenter: mapViewRef.current.center,
+      mapZoom: mapViewRef.current.zoom,
     };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
     setHasRecent(true);
@@ -144,6 +158,8 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
     setCourseHoles([]);
     setCourseLandmarks([]);
     setCourseCartPaths([]);
+    mapViewRef.current = { center: [39.5, -98.35], zoom: 4 };
+    setMapInitView(null);
     setActivePlayerId(null);
     setActiveGroupId(null);
     setHasRecent(false);
@@ -771,12 +787,19 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
 
       {/* ── Map ── */}
       <div className="min-h-0 flex-1 overflow-hidden">
-        <TestCaseBuilderMap
-          pins={pins}
-          isPlacing={isPlacing}
-          viewTarget={viewTarget}
-          onMapClick={handleMapClick}
-        />
+        {mapReady && (
+          <TestCaseBuilderMap
+            pins={pins}
+            isPlacing={isPlacing}
+            viewTarget={viewTarget}
+            initialCenter={mapInitView?.center ?? [39.5, -98.35]}
+            initialZoom={mapInitView?.zoom ?? 4}
+            onMapClick={handleMapClick}
+            onViewChange={(center, zoom) => {
+              mapViewRef.current = { center, zoom };
+            }}
+          />
+        )}
       </div>
     </div>
   );

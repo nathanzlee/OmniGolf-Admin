@@ -66,12 +66,18 @@ export default function TestCaseBuilderMap({
   pins,
   isPlacing,
   viewTarget,
+  initialCenter = [39.5, -98.35],
+  initialZoom = 4,
   onMapClick,
+  onViewChange,
 }: {
   pins: LocationPin[];
   isPlacing: boolean;
   viewTarget?: ViewTarget | null;
+  initialCenter?: [number, number];
+  initialZoom?: number;
   onMapClick: (lat: number, lng: number) => void;
+  onViewChange?: (center: [number, number], zoom: number) => void;
 }) {
   useEffect(() => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -89,8 +95,8 @@ export default function TestCaseBuilderMap({
       style={{ cursor: isPlacing ? "crosshair" : undefined }}
     >
       <MapContainer
-        center={[39.5, -98.35]}
-        zoom={4}
+        center={initialCenter}
+        zoom={initialZoom}
         style={{ height: "100%", width: "100%" }}
       >
         <TileLayer
@@ -98,6 +104,7 @@ export default function TestCaseBuilderMap({
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
         <ViewHandler target={viewTarget ?? null} />
+        <MoveHandler onViewChange={onViewChange} />
         <ClickHandler active={isPlacing} onMapClick={onMapClick} />
         {pins.map((pin) => (
           <Marker
