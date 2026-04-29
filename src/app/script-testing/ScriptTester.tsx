@@ -237,14 +237,25 @@ function computeEventMetrics(
     try { assignmentCaught = JSON.parse(assignmentJsonMap.get("caught_events.json") ?? "[]"); } catch { /* ignore */ }
     try { pacingCaught = JSON.parse(pacingJsonMap.get("caught_events.json") ?? "[]"); } catch { /* ignore */ }
 
+    // Build group_id → label from the session JSON groups (same data the scripts see)
+    const groupIdToLabel = new Map<string, string>(
+      (sessionData.groups ?? []).map((g: any) => [
+        String(g.group_id ?? g.id ?? ""),
+        String(g.label ?? ""),
+      ])
+    );
+
     const sessionEvents: any[] = sessionData.events ?? [];
 
     // ── If there are expected events in the session JSON, match against caught ──
     if (sessionEvents.length > 0) {
       const matches: EventMatchRow[] = sessionEvents.map((ev: any) => {
         const evType = normalizeEventType(ev.event_type ?? "");
-        const groupLabel: string | null = ev.group_label ?? null;
         const groupId: string | null = ev.group_id ?? null;
+        // Derive group label from session groups (authoritative) rather than ev.group_label
+        const groupLabel: string | null = groupId
+          ? (groupIdToLabel.get(groupId) ?? ev.group_label ?? null)
+          : (ev.group_label ?? null);
         const landmark: string | null = ev.landmark_label ?? ev.landmark ?? null;
 
         const isAssignment = evType === "groupsplit" || evType === "groupjoin";
@@ -254,16 +265,15 @@ function computeEventMetrics(
         let detail: string | null = null;
 
         if (isAssignment) {
-          // Match by event type + group label (case-insensitive) OR hole number from landmark
           const landmarkHole = ev.landmark?.startsWith?.("hole:")
             ? parseInt(ev.landmark.split(":")[1], 10) : null;
           const hit = assignmentCaught.find((c: any) => {
             if (normalizeEventType(c.event ?? "") !== evType) return false;
+            // Prefer hole_number match (unambiguous), then fall back to group label
+            if (landmarkHole != null && c.hole_number != null) return c.hole_number === landmarkHole;
             const cGroup = (c.group ?? "").trim().toLowerCase();
             const evGroup = (groupLabel ?? "").trim().toLowerCase();
-            if (cGroup && evGroup) return cGroup === evGroup;
-            if (landmarkHole != null && c.hole_number != null) return c.hole_number === landmarkHole;
-            return false;
+            return cGroup.length > 0 && evGroup.length > 0 && cGroup === evGroup;
           });
           if (hit) {
             caught = true;
