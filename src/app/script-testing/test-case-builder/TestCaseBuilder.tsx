@@ -668,7 +668,7 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
               ) : filteredPlayers.length === 0 ? (
                 <p className="px-4 py-3 text-xs text-zinc-400">No players match the current filter.</p>
               ) : (
-                <div className="divide-y divide-zinc-100">
+                <div className="max-h-48 divide-y divide-zinc-100 overflow-y-auto">
                   {filteredPlayers.map((player) => {
                     const blocked = isBlockedAtSnapshot(activeSnapshot, player);
                     const loc = blocked ? null : snapshotLocs.find((l) => l.playerId === player.localId);
