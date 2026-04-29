@@ -25,6 +25,24 @@ type StoredPacingRow = {
   endTime: string;
 };
 
+type StoredEventRow = {
+  id: string;
+  groupId: string;
+  eventType: string;
+  landmark: string;
+  time: string;
+};
+
+type EventMatchRow = {
+  eventType: string;
+  groupLabel: string | null;
+  landmark: string | null;
+  actualTime: string;
+  detectedTime: string | null;
+  deltaMin: number | null;
+  match: boolean | null;
+};
+
 type PacingMatchRow = {
   groupLabel: string;
   holeNumber: number;
@@ -56,6 +74,8 @@ type SessionRunResult = {
   assignment: ScriptResult;
   pacingMatches: PacingMatchRow[];
   csvAnnotations: CsvAnnotations;
+  eventMatches: EventMatchRow[];
+  assignmentAnnotations: CsvAnnotations;
 };
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -197,6 +217,126 @@ function computePacingMetrics(
     return { pacingMatches: matches, csvAnnotations: annotations };
   } catch {
     return { pacingMatches: [], csvAnnotations: {} };
+  }
+}
+
+function computeEventMetrics(
+  storedEvents: StoredEventRow[],
+  assignmentResult: ScriptResult,
+  pacingResult: ScriptResult,
+  sessionData: any
+): { eventMatches: EventMatchRow[]; assignmentAnnotations: CsvAnnotations } {
+  if (storedEvents.length === 0) return { eventMatches: [], assignmentAnnotations: {} };
+  try {
+    const groupIdToLabel = new Map<string, string>(
+      (sessionData.groups ?? []).map((g: any) => [
+        (g.group_id ?? g.id) as string,
+        (g.label ?? "") as string,
+      ])
+    );
+
+    const assignmentCsvMap = new Map<string, string>(
+      (assignmentResult?.csvFiles ?? []).map((f) => [f.name, f.content])
+    );
+    const pacingCsvMap = new Map<string, string>(
+      (pacingResult?.csvFiles ?? []).map((f) => [f.name, f.content])
+    );
+
+    const groupChangesContent = assignmentCsvMap.get("input_group_changes.csv") ?? null;
+    const groupChanges = groupChangesContent ? parseCSV(groupChangesContent) : null;
+
+    const matches: EventMatchRow[] = [];
+    const annotations: CsvAnnotations = {};
+
+    const addAnnotation = (filename: string, ts: string, ann: RowAnnotation) => {
+      if (!annotations[filename]) annotations[filename] = {};
+      if (!annotations[filename][ts]) annotations[filename][ts] = [];
+      annotations[filename][ts].push(ann);
+    };
+
+    for (const ev of storedEvents) {
+      const groupLabel = ev.groupId ? (groupIdToLabel.get(ev.groupId) ?? null) : null;
+      const isAssignmentEvent = ev.eventType === "group split" || ev.eventType === "group join";
+      const isPacingEvent = ev.eventType === "behind pace" || ev.eventType === "leave course";
+
+      let detectedTime: string | null = null;
+      let deltaMin: number | null = null;
+      let match: boolean | null = null;
+      let sourceFile: string | null = null;
+
+      if (isAssignmentEvent && groupChanges) {
+        const { headers, rows: csvRows } = groupChanges;
+        const tsCol = headers.findIndex((h) => h === "timestamp" || h === "time");
+        const typeCol = headers.findIndex((h) => h === "event_type" || h === "type");
+        if (tsCol !== -1) {
+          const keyword = ev.eventType === "group split" ? "split" : "join";
+          const candidates = typeCol !== -1
+            ? csvRows.filter((r) => r[typeCol]?.toLowerCase().includes(keyword))
+            : csvRows;
+          let best = Infinity;
+          for (const r of candidates) {
+            const ts = r[tsCol];
+            if (!ts || !ev.time) continue;
+            const d = absDiffMin(ev.time, ts);
+            if (d < best) { best = d; detectedTime = ts; }
+          }
+          if (detectedTime) {
+            deltaMin = best;
+            match = best <= MATCH_THRESHOLD_MIN;
+            sourceFile = "input_group_changes.csv";
+          }
+        }
+      } else if (isPacingEvent) {
+        const keyword = ev.eventType === "behind pace" ? "behind" : "left";
+        outer: for (const [filename, csvContent] of pacingCsvMap) {
+          const { headers, rows: csvRows } = parseCSV(csvContent);
+          const tsCol = headers.findIndex((h) => h === "timestamp" || h === "time");
+          const typeCol = headers.findIndex(
+            (h) => h === "event_type" || h === "type" || h === "status"
+          );
+          if (tsCol === -1 || typeCol === -1) continue;
+          const candidates = csvRows.filter((r) =>
+            r[typeCol]?.toLowerCase().includes(keyword)
+          );
+          let best = Infinity;
+          let found: string | null = null;
+          for (const r of candidates) {
+            const ts = r[tsCol];
+            if (!ts || !ev.time) continue;
+            const d = absDiffMin(ev.time, ts);
+            if (d < best) { best = d; found = ts; }
+          }
+          if (found) {
+            detectedTime = found;
+            deltaMin = best;
+            match = best <= MATCH_THRESHOLD_MIN;
+            sourceFile = filename;
+            break outer;
+          }
+        }
+      }
+
+      matches.push({
+        eventType: ev.eventType,
+        groupLabel,
+        landmark: ev.landmark || null,
+        actualTime: ev.time || "",
+        detectedTime,
+        deltaMin,
+        match,
+      });
+
+      if (detectedTime && sourceFile) {
+        addAnnotation(sourceFile, detectedTime, {
+          label: ev.eventType,
+          match: match ?? false,
+        });
+      }
+    }
+
+    return { eventMatches: matches, assignmentAnnotations: annotations };
+  } catch {
+    return { eventMatches: [], assignmentAnnotations: {} };
   }
 }
 
@@ -459,6 +599,199 @@ function PacingScriptResultPanel({
                               className={`mr-1 text-xs font-medium ${
                                 a.match ? "text-green-600" : "text-red-500"
                               }`}
+                            >
+                              {a.label} {a.match ? "✓" : "✗"}
+                            </span>
+                          ))}
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+        {(result.stdout || result.stderr) && (
+          <details className="border-t border-zinc-200 px-4 py-3">
+            <summary className="cursor-pointer text-xs text-zinc-500 hover:text-zinc-700">
+              Script output
+            </summary>
+            {result.stdout && (
+              <pre className="mt-2 whitespace-pre-wrap font-mono text-xs text-zinc-700">
+                {result.stdout}
+              </pre>
+            )}
+            {result.stderr && (
+              <pre className="mt-2 whitespace-pre-wrap font-mono text-xs text-red-600">
+                {result.stderr}
+              </pre>
+            )}
+          </details>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function EventMetrics({ matches }: { matches: EventMatchRow[] }) {
+  if (matches.length === 0) return null;
+
+  const checked = matches.filter((m) => m.match !== null);
+  const matched = checked.filter((m) => m.match).length;
+  const allGood = matched === checked.length && checked.length > 0;
+
+  return (
+    <div className="rounded-xl border border-zinc-200 bg-white shadow-sm">
+      <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3">
+        <h3 className="text-sm font-semibold text-zinc-900">Event Coverage</h3>
+        <span className={`text-xs font-medium ${allGood ? "text-green-600" : "text-zinc-600"}`}>
+          {matched}/{checked.length} events accounted for (±{MATCH_THRESHOLD_MIN} min)
+        </span>
+      </div>
+      <div className="max-h-56 overflow-auto">
+        <table className="w-full border-collapse">
+          <thead>
+            <tr className="sticky top-0 bg-zinc-50 text-xs font-semibold uppercase tracking-wide text-zinc-600">
+              <th className="border-b border-zinc-200 px-3 py-2 text-left">Event</th>
+              <th className="border-b border-zinc-200 px-3 py-2 text-left">Group</th>
+              <th className="border-b border-zinc-200 px-3 py-2 text-left">Landmark</th>
+              <th className="border-b border-zinc-200 px-3 py-2 text-left">Actual Time</th>
+              <th className="border-b border-zinc-200 px-3 py-2 text-left">Detected Time</th>
+              <th className="border-b border-zinc-200 px-3 py-2 text-left">Δ</th>
+            </tr>
+          </thead>
+          <tbody>
+            {matches.map((m, i) => (
+              <tr key={i} className="border-b border-zinc-100 last:border-0 text-sm text-zinc-800">
+                <td className="px-3 py-2 whitespace-nowrap capitalize">{m.eventType}</td>
+                <td className="px-3 py-2 whitespace-nowrap">{m.groupLabel ?? "—"}</td>
+                <td className="px-3 py-2 whitespace-nowrap">{m.landmark ?? "—"}</td>
+                <td className="px-3 py-2 whitespace-nowrap">{m.actualTime || "—"}</td>
+                <td className="px-3 py-2 whitespace-nowrap">{m.detectedTime ?? "—"}</td>
+                <DeltaCell deltaMin={m.deltaMin} match={m.match} />
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function AssignmentScriptResultPanel({
+  result,
+  eventMatches,
+  assignmentAnnotations,
+}: {
+  result: ScriptResult;
+  eventMatches: EventMatchRow[];
+  assignmentAnnotations: CsvAnnotations;
+}) {
+  const [activeTab, setActiveTab] = useState(0);
+  if (!result) return null;
+
+  const csvFiles = result.csvFiles ?? [];
+
+  if (result.error) {
+    return (
+      <div className="space-y-3">
+        <EventMetrics matches={eventMatches} />
+        <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          <strong>Error:</strong> {result.error}
+          {result.stderr && (
+            <pre className="mt-2 whitespace-pre-wrap font-mono text-xs">{result.stderr}</pre>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (csvFiles.length === 0) {
+    return (
+      <div className="space-y-3">
+        <EventMetrics matches={eventMatches} />
+        <div className="rounded-xl border border-zinc-200 bg-white p-4 text-sm text-zinc-500">
+          Script ran successfully but produced no CSV files.
+          {result.stdout && (
+            <pre className="mt-2 whitespace-pre-wrap font-mono text-xs text-zinc-700">
+              {result.stdout}
+            </pre>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  const currentFile = csvFiles[activeTab];
+  const { headers, rows } = parseCSV(currentFile?.content ?? "");
+  const fileAnnotations = assignmentAnnotations[currentFile?.name ?? ""] ?? {};
+  const tsIdx = headers.findIndex((h) => h === "timestamp" || h === "time");
+  const hasAnnotations = Object.keys(fileAnnotations).length > 0;
+
+  return (
+    <div className="space-y-3">
+      <EventMetrics matches={eventMatches} />
+      <div className="rounded-xl border border-zinc-200 bg-white shadow-sm">
+        <div className="flex flex-wrap gap-1 border-b border-zinc-200 px-4 pt-3">
+          {csvFiles.map((f, i) => (
+            <button
+              key={f.name}
+              type="button"
+              onClick={() => setActiveTab(i)}
+              className={`-mb-px rounded-t-lg border px-3 py-2 text-xs font-medium transition-colors ${
+                activeTab === i
+                  ? "border-zinc-200 border-b-white bg-white text-zinc-900"
+                  : "border-transparent text-zinc-500 hover:text-zinc-700"
+              }`}
+            >
+              {f.name}
+            </button>
+          ))}
+        </div>
+        <div className="max-h-[55vh] overflow-auto p-4">
+          {headers.length === 0 ? (
+            <p className="text-sm text-zinc-500">CSV is empty.</p>
+          ) : (
+            <table className="w-full border-collapse text-sm">
+              <thead>
+                <tr className="sticky top-0 bg-zinc-50">
+                  {headers.map((h) => (
+                    <th
+                      key={h}
+                      className="border-b border-zinc-200 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-zinc-600 whitespace-nowrap"
+                    >
+                      {h}
+                    </th>
+                  ))}
+                  {hasAnnotations && (
+                    <th className="border-b border-zinc-200 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-zinc-600 whitespace-nowrap">
+                      Actual
+                    </th>
+                  )}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row, ri) => {
+                  const ts = tsIdx !== -1 ? row[tsIdx] : null;
+                  const anns = ts ? (fileAnnotations[ts] ?? []) : [];
+                  const hasAnn = anns.length > 0;
+                  return (
+                    <tr
+                      key={ri}
+                      className={`border-b border-zinc-100 last:border-0 ${hasAnn ? "bg-amber-50" : ""}`}
+                    >
+                      {row.map((cell, ci) => (
+                        <td key={ci} className="px-3 py-2 text-zinc-800 whitespace-nowrap">
+                          {cell}
+                        </td>
+                      ))}
+                      {hasAnnotations && (
+                        <td className="px-3 py-2 whitespace-nowrap">
+                          {anns.map((a, ai) => (
+                            <span
+                              key={ai}
+                              className={`mr-1 text-xs font-medium ${a.match ? "text-green-600" : "text-red-500"}`}
                             >
                               {a.label} {a.match ? "✓" : "✗"}
                             </span>
@@ -763,6 +1096,8 @@ export default function ScriptTester({
             assignment: assignment.b64 ? errResult : null,
             pacingMatches: [],
             csvAnnotations: {},
+            eventMatches: [],
+            assignmentAnnotations: {},
           });
           setRunProgress((p) => p && { ...p, done: p.done + 1 });
           continue;
@@ -785,6 +1120,19 @@ export default function ScriptTester({
           pr,
           sessionData
         );
+        const storedEvents: StoredEventRow[] = (sessionData.events ?? []).map((ev: any) => ({
+          id: ev.id ?? "",
+          groupId: ev.group_id ?? "",
+          eventType: ev.event_type ?? "",
+          landmark: ev.landmark ?? "",
+          time: ev.time ?? "",
+        }));
+        const { eventMatches, assignmentAnnotations } = computeEventMetrics(
+          storedEvents,
+          ar,
+          pr,
+          sessionData
+        );
         results.push({
           sessionId: item.id,
           sessionName: item.name,
@@ -793,6 +1141,8 @@ export default function ScriptTester({
           assignment: ar,
           pacingMatches,
           csvAnnotations,
+          eventMatches,
+          assignmentAnnotations,
         });
       } catch (err: any) {
         const errResult: ScriptResult = {
@@ -809,6 +1159,8 @@ export default function ScriptTester({
           assignment: assignment.b64 ? errResult : null,
           pacingMatches: [],
           csvAnnotations: {},
+          eventMatches: [],
+          assignmentAnnotations: {},
         });
       }
       setRunProgress((p) => p && { ...p, done: p.done + 1 });
@@ -1047,7 +1399,7 @@ export default function ScriptTester({
                             : "border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50"
                         }`}
                       >
-                        {key === "pacing" ? "Group Pacing" : "Group Assignments"}
+                        {key === "pacing" ? "Group Pacing" : "Events"}
                       </button>
                     ))}
                   </div>
@@ -1073,7 +1425,11 @@ export default function ScriptTester({
                 />
               )}
               {activeResult && activeResultType === "assignment" && (
-                <ScriptResultPanel result={activeResult.assignment} />
+                <AssignmentScriptResultPanel
+                  result={activeResult.assignment}
+                  eventMatches={activeResult.eventMatches}
+                  assignmentAnnotations={activeResult.assignmentAnnotations}
+                />
               )}
             </div>
           </div>
