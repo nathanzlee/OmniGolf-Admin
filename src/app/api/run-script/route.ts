@@ -9,6 +9,7 @@ const execAsync = promisify(exec);
 
 type ScriptResult = {
   csvFiles: { name: string; content: string }[];
+  jsonFiles: { name: string; content: string }[];
   stdout: string;
   stderr: string;
   error?: string;
@@ -39,10 +40,18 @@ async function runScript(
         content: await readFile(join(subdir, f), "utf-8"),
       }))
     );
-    return { csvFiles: csvResults, stdout, stderr };
+    const jsonFiles = files.filter((f) => f.endsWith(".json") && f !== "input.json").sort();
+    const jsonResults = await Promise.all(
+      jsonFiles.map(async (f) => ({
+        name: f,
+        content: await readFile(join(subdir, f), "utf-8"),
+      }))
+    );
+    return { csvFiles: csvResults, jsonFiles: jsonResults, stdout, stderr };
   } catch (err: any) {
     return {
       csvFiles: [],
+      jsonFiles: [],
       stdout: err?.stdout ?? "",
       stderr: err?.stderr ?? "",
       error: err?.message ?? "Script execution failed",
