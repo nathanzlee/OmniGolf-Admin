@@ -488,25 +488,17 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
       <div className="flex w-80 shrink-0 flex-col gap-3 overflow-y-auto pr-1">
 
         {/* Course */}
-        <div className="rounded-xl border border-zinc-200 bg-white shadow-sm">
-          <div className="border-b border-zinc-100 px-4 py-2.5">
-            <h2 className="text-sm font-semibold text-zinc-900">Course</h2>
-          </div>
-          <div className="px-3 py-2">
-            <select
-              value={selectedCourseId}
-              onChange={(e) => handleCourseChange(e.target.value)}
-              disabled={loadingCourse}
-              className={`${inputCls} w-full`}
-            >
-              <option value="">— Select a course —</option>
-              {courseOptions.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
-            {loadingCourse && <p className="mt-1 text-xs text-zinc-400">Loading course…</p>}
-          </div>
-        </div>
+        <select
+          value={selectedCourseId}
+          onChange={(e) => handleCourseChange(e.target.value)}
+          disabled={loadingCourse}
+          className={`${inputCls} w-full`}
+        >
+          <option value="">— Select a course —</option>
+          {courseOptions.map((c) => (
+            <option key={c.id} value={c.id}>{c.name}</option>
+          ))}
+        </select>
 
         {/* Groups */}
         <div className="rounded-xl border border-zinc-200 bg-white shadow-sm">
