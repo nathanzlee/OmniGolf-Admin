@@ -1,10 +1,10 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
-import { upsertTestCase } from "@/lib/testCases";
-import type { TestCase } from "@/lib/testCases";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { loadTestCases, upsertTestCase } from "@/lib/testCases";
+import type { LocationData, TestCase } from "@/lib/testCases";
 import type { LocationPin, ViewTarget } from "./TestCaseBuilderMap";
 
 const TestCaseBuilderMap = dynamic(() => import("./TestCaseBuilderMap"), { ssr: false });
@@ -27,7 +27,7 @@ type Snapshot = { localId: string; timestamp: string; sourceGroupId: string | nu
 type MockLocation = { localId: string; snapshotId: string; playerId: string; lat: number; lng: number };
 
 type CourseHole = { holeNumber: number; teeLat: number; teeLng: number; greenLat: number; greenLng: number; allottedTime: number };
-type CourseLandmark = { landmarkType: string; endpoint1Lat: number; endpoint1Lng: number; endpoint2Lat?: number; endpoint2Lng?: number };
+type CourseLandmark = { id?: string; landmarkType: string; endpoint1Lat: number; endpoint1Lng: number; endpoint2Lat?: number; endpoint2Lng?: number };
 type CourseCartPath = { holeNumber: number; label: string | null; pathType: string; coordinates: { lat: number; lng: number }[] };
 
 type SavedState = {
@@ -74,9 +74,16 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
   const [activeSnapshotIdx, setActiveSnapshotIdx] = useState(0);
   const [activePlayerId, setActivePlayerId] = useState<string | null>(null);
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
-  const [hasRecent, setHasRecent] = useState(false);
+  const [testCases, setTestCases] = useState<TestCase[]>([]);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportMode, setExportMode] = useState<"new" | "existing">("new");
+  const [exportName, setExportName] = useState("");
+  const [targetTestCaseId, setTargetTestCaseId] = useState("");
+  const [exportMessage, setExportMessage] = useState("");
 
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const editTestCaseId = searchParams.get("tcId");
   const restoringRef = useRef(false);
   const mapViewRef = useRef<{ center: [number, number]; zoom: number }>({ center: [39.5, -98.35], zoom: 4 });
   const [mapInitView, setMapInitView] = useState<{ center: [number, number]; zoom: number } | null>(null);
@@ -104,50 +111,7 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
     setActiveGroupId(null);
   }
 
-  // Auto-load on mount
-  useEffect(() => {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
-      setMapReady(true);
-      return;
-    }
-    try {
-      restoringRef.current = true;
-      applyState(JSON.parse(raw) as SavedState);
-      setHasRecent(true);
-    } catch { /* ignore */ } finally {
-      setTimeout(() => { restoringRef.current = false; setMapReady(true); }, 0);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Auto-save on state changes
-  useEffect(() => {
-    if (restoringRef.current) return;
-    const payload: SavedState = {
-      selectedCourseId, selectedCourseName,
-      groups, players, snapshots, locations, activeSnapshotIdx,
-      courseHoles, courseLandmarks, courseCartPaths,
-      mapCenter: mapViewRef.current.center,
-      mapZoom: mapViewRef.current.zoom,
-    };
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-    setHasRecent(true);
-  }, [selectedCourseId, selectedCourseName, groups, players, snapshots, locations, activeSnapshotIdx]);
-
-  function loadRecent() {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return;
-    try {
-      restoringRef.current = true;
-      applyState(JSON.parse(raw) as SavedState);
-    } catch { /* ignore */ } finally {
-      setTimeout(() => { restoringRef.current = false; }, 0);
-    }
-  }
-
-  function clearState() {
-    window.localStorage.removeItem(STORAGE_KEY);
+  const resetBuilderState = useCallback(() => {
     setGroups([]);
     setPlayers([]);
     setSnapshots([]);
@@ -159,10 +123,125 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
     setCourseLandmarks([]);
     setCourseCartPaths([]);
     mapViewRef.current = { center: [39.5, -98.35], zoom: 4 };
-    setMapInitView(null);
+    setMapInitView({ center: [39.5, -98.35], zoom: 4 });
     setActivePlayerId(null);
     setActiveGroupId(null);
-    setHasRecent(false);
+  }, []);
+
+  const fitMapToLocationData = useCallback((data: LocationData) => {
+    const playerLatLngs: [number, number][] = data.players.flatMap((p) =>
+      p.locations.map((loc) => [loc.lat, loc.lng] as [number, number])
+    );
+    const courseLatLngs: [number, number][] = data.holes.flatMap((h) => [
+      [h.teeLat, h.teeLng] as [number, number],
+      [h.greenLat, h.greenLng] as [number, number],
+    ]);
+    const landmarkLatLngs: [number, number][] = data.landmarks.flatMap((l) => {
+      const points: [number, number][] = [[l.endpoint1Lat, l.endpoint1Lng]];
+      if (l.endpoint2Lat != null && l.endpoint2Lng != null) points.push([l.endpoint2Lat, l.endpoint2Lng]);
+      return points;
+    });
+    const latlngs = playerLatLngs.length > 0 ? playerLatLngs : [...courseLatLngs, ...landmarkLatLngs];
+    if (latlngs.length > 0) setViewTarget({ key: Date.now(), latlngs });
+  }, []);
+
+  const applyLocationData = useCallback((data: LocationData) => {
+    const snapshotIdByTimestamp = new Map<string, string>();
+    const nextSnapshots = Array.from(
+      new Set(data.players.flatMap((p) => p.locations.map((loc) => loc.timestamp)))
+    )
+      .sort()
+      .map((timestamp) => {
+        const localId = makeId();
+        snapshotIdByTimestamp.set(timestamp, localId);
+        return { localId, timestamp: timestamp.slice(0, 16), sourceGroupId: null };
+      });
+
+    setSelectedCourseId(data.courseId);
+    setSelectedCourseName(data.courseName);
+    setCourseHoles(data.holes);
+    setCourseLandmarks(data.landmarks);
+    setCourseCartPaths([]);
+    setGroups(data.groups);
+    setPlayers(
+      data.players.map((p) => ({
+        localId: p.localId,
+        name: p.name,
+        groupId: p.groupId,
+        usingCarts: p.usingCarts ?? false,
+      }))
+    );
+    setSnapshots(nextSnapshots);
+    setLocations(
+      data.players.flatMap((p) =>
+        p.locations.flatMap((loc) => {
+          const snapshotId = snapshotIdByTimestamp.get(loc.timestamp);
+          if (!snapshotId) return [];
+          return [{ localId: makeId(), snapshotId, playerId: p.localId, lat: loc.lat, lng: loc.lng }];
+        })
+      )
+    );
+    setActiveSnapshotIdx(0);
+    setActivePlayerId(null);
+    setActiveGroupId(null);
+    fitMapToLocationData(data);
+  }, [fitMapToLocationData]);
+
+  // Auto-load on mount
+  useEffect(() => {
+    if (editTestCaseId) {
+      setMapReady(true);
+      return;
+    }
+
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) {
+      setMapReady(true);
+      return;
+    }
+    try {
+      restoringRef.current = true;
+      applyState(JSON.parse(raw) as SavedState);
+    } catch { /* ignore */ } finally {
+      setTimeout(() => { restoringRef.current = false; setMapReady(true); }, 0);
+    }
+  }, [applyLocationData, editTestCaseId]);
+
+  useEffect(() => {
+    const cases = loadTestCases();
+    setTestCases(cases);
+    if (!editTestCaseId) return;
+
+    const tc = cases.find((t) => t.id === editTestCaseId);
+    restoringRef.current = true;
+    if (tc?.locationData) {
+      applyLocationData(tc.locationData);
+    } else {
+      resetBuilderState();
+    }
+    setExportMode("existing");
+    setTargetTestCaseId(editTestCaseId);
+    setExportName(tc?.name ?? "");
+    setTimeout(() => { restoringRef.current = false; }, 0);
+  }, [applyLocationData, editTestCaseId, resetBuilderState]);
+
+  // Auto-save on state changes
+  useEffect(() => {
+    if (editTestCaseId) return;
+    if (restoringRef.current) return;
+    const payload: SavedState = {
+      selectedCourseId, selectedCourseName,
+      groups, players, snapshots, locations, activeSnapshotIdx,
+      courseHoles, courseLandmarks, courseCartPaths,
+      mapCenter: mapViewRef.current.center,
+      mapZoom: mapViewRef.current.zoom,
+    };
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+  }, [editTestCaseId, selectedCourseId, selectedCourseName, groups, players, snapshots, locations, activeSnapshotIdx, courseHoles, courseLandmarks, courseCartPaths]);
+
+  function clearState() {
+    if (!editTestCaseId) window.localStorage.removeItem(STORAGE_KEY);
+    resetBuilderState();
   }
 
   // ── Derived ───────────────────────────────────────────────────
@@ -368,108 +447,89 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
 
   // ── Export ────────────────────────────────────────────────────
 
-  function buildSessionJson() {
+  function buildLocationData(): LocationData {
     const sorted = [...snapshots].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 
-    // Cart paths grouped by hole number
-    const cpByHole = new Map<number, CourseCartPath[]>();
-    for (const cp of courseCartPaths) {
-      if (!cpByHole.has(cp.holeNumber)) cpByHole.set(cp.holeNumber, []);
-      cpByHole.get(cp.holeNumber)!.push(cp);
-    }
-
     return {
-      version: 1,
-      exported_at: new Date().toISOString(),
-      session_id: makeId(),
-      session_name: selectedCourseName ? `${selectedCourseName} Mock` : "Mock Session",
-      course_id: selectedCourseId || "",
-      course_name: selectedCourseName || "",
-      holes: courseHoles.map((h) => ({
-        hole_number: h.holeNumber,
-        tee_lat: h.teeLat,
-        tee_lng: h.teeLng,
-        green_lat: h.greenLat,
-        green_lng: h.greenLng,
-        allotted_time: h.allottedTime,
-        cart_paths: (cpByHole.get(h.holeNumber) ?? []).map((cp) => ({
-          label: cp.label ?? null,
-          path_type: cp.pathType,
-          coordinates: cp.coordinates,
-        })),
-      })),
-      course_landmarks: courseLandmarks.map((l) => {
-        if (l.landmarkType === "driving_range" && l.endpoint2Lat != null) {
-          const midLat = (l.endpoint1Lat + l.endpoint2Lat) / 2;
-          const midLng = (l.endpoint1Lng + (l.endpoint2Lng ?? l.endpoint1Lng)) / 2;
-          return {
-            id: makeId(),
-            landmark_type: l.landmarkType,
-            latitude: midLat,
-            longitude: midLng,
-            endpoint1_latitude: l.endpoint1Lat,
-            endpoint1_longitude: l.endpoint1Lng,
-            endpoint2_latitude: l.endpoint2Lat,
-            endpoint2_longitude: l.endpoint2Lng,
-          };
-        }
-        return {
-          id: makeId(),
-          landmark_type: l.landmarkType,
-          latitude: l.endpoint1Lat,
-          longitude: l.endpoint1Lng,
-        };
-      }),
+      courseId: selectedCourseId || "",
+      courseName: selectedCourseName || "",
+      holes: courseHoles,
+      landmarks: courseLandmarks.map((l) => ({ ...l, id: l.id ?? makeId() })),
       groups: groups.map((g) => ({
-        group_id: g.localId,
+        localId: g.localId,
         label: g.label,
-        tee_time: g.teeTime ? new Date(g.teeTime).toISOString() : null,
-        players: players
-          .filter((p) => p.groupId === g.localId)
-          .map((p) => ({ user_id: p.localId, using_carts: p.usingCarts })),
+        teeTime: g.teeTime,
       })),
       players: players.map((p) => ({
-        user_id: p.localId,
-        email: p.name || p.localId,
-        using_carts: p.usingCarts,
+        localId: p.localId,
+        name: p.name || p.localId,
+        groupId: p.groupId,
+        usingCarts: p.usingCarts,
         locations: sorted.flatMap((snap) => {
           const loc = locations.find((l) => l.snapshotId === snap.localId && l.playerId === p.localId);
           if (!loc) return [];
-          return [{ id: makeId(), recorded_at: new Date(snap.timestamp).toISOString(), latitude: loc.lat, longitude: loc.lng, horizontal_accuracy: null }];
+          return [{ timestamp: snap.timestamp, lat: loc.lat, lng: loc.lng }];
         }),
       })),
-      group_pacing: [],
-      events: [],
     };
   }
 
-  function downloadJson() {
-    const json = JSON.stringify(buildSessionJson(), null, 2);
-    const blob = new Blob([json], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `mock-session-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+  function openExportDialog() {
+    const cases = loadTestCases();
+    setTestCases(cases);
+    setExportMessage("");
+    setExportName(selectedCourseName ? `${selectedCourseName} Mock` : "Mock Location Data");
+    if (editTestCaseId && cases.some((tc) => tc.id === editTestCaseId)) {
+      setExportMode("existing");
+      setTargetTestCaseId(editTestCaseId);
+    } else if (targetTestCaseId && cases.some((tc) => tc.id === targetTestCaseId)) {
+      setExportMode("existing");
+    } else {
+      setExportMode("new");
+      setTargetTestCaseId(cases[0]?.id ?? "");
+    }
+    setExportOpen(true);
   }
 
-  function exportAsTestCase() {
-    const json = JSON.stringify(buildSessionJson(), null, 2);
-    const id = crypto.randomUUID();
+  function exportToTestCase() {
+    const locationData = buildLocationData();
     const now = new Date().toISOString();
+    const existingCases = loadTestCases();
+
+    if (exportMode === "existing") {
+      const existing = existingCases.find((tc) => tc.id === targetTestCaseId);
+      if (!existing) {
+        setExportMessage("Choose a test case to update.");
+        return;
+      }
+      upsertTestCase({
+        ...existing,
+        courseId: locationData.courseId || null,
+        courseName: locationData.courseName || null,
+        holes: locationData.holes,
+        landmarks: locationData.landmarks,
+        groups: locationData.groups,
+        locationData,
+        updatedAt: now,
+      });
+      router.push(`/script-testing/test-cases/${existing.id}`);
+      return;
+    }
+
+    const id = crypto.randomUUID();
     const tc: TestCase = {
       id,
-      name: selectedCourseName ? `${selectedCourseName} Mock` : "Mock Session",
+      name: exportName.trim() || (selectedCourseName ? `${selectedCourseName} Mock` : "Mock Location Data"),
       description: "",
-      courseId: selectedCourseId || null,
-      courseName: selectedCourseName || null,
-      holes: [],
-      landmarks: [],
-      groups: groups.map((g) => ({ localId: g.localId, label: g.label, teeTime: g.teeTime })),
+      courseId: locationData.courseId || null,
+      courseName: locationData.courseName || null,
+      holes: locationData.holes,
+      landmarks: locationData.landmarks,
+      groups: locationData.groups,
       pacingRows: [],
       events: [],
-      sessionJson: json,
+      sessionJson: "",
+      locationData,
       createdAt: now,
       updatedAt: now,
     };
@@ -477,10 +537,111 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
     router.push(`/script-testing/test-cases/${id}`);
   }
 
+  function saveToCurrentTestCase() {
+    if (!editTestCaseId) return;
+    const locationData = buildLocationData();
+    const existing = loadTestCases().find((tc) => tc.id === editTestCaseId);
+    const now = new Date().toISOString();
+    const tc: TestCase = existing
+      ? {
+          ...existing,
+          courseId: locationData.courseId || null,
+          courseName: locationData.courseName || null,
+          holes: locationData.holes,
+          landmarks: locationData.landmarks,
+          groups: locationData.groups,
+          locationData,
+          updatedAt: now,
+        }
+      : {
+          id: editTestCaseId,
+          name: selectedCourseName ? `${selectedCourseName} Mock` : "Untitled Test Case",
+          description: "",
+          courseId: locationData.courseId || null,
+          courseName: locationData.courseName || null,
+          holes: locationData.holes,
+          landmarks: locationData.landmarks,
+          groups: locationData.groups,
+          pacingRows: [],
+          events: [],
+          sessionJson: "",
+          locationData,
+          createdAt: now,
+          updatedAt: now,
+        };
+    upsertTestCase(tc);
+    router.push(`/script-testing/test-cases/${editTestCaseId}`);
+  }
+
   const inputCls = "rounded border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-xs text-zinc-900 outline-none focus:border-zinc-400 focus:bg-white";
   const activeSnapSourceGroup = activeSnapshot?.sourceGroupId
     ? groups.find((g) => g.localId === activeSnapshot.sourceGroupId)
     : null;
+
+  const exportModal = exportOpen ? (
+    <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/30 px-4">
+      <div className="w-full max-w-sm rounded-xl border border-zinc-200 bg-white p-4 shadow-xl">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-zinc-900">Export</h2>
+          <button
+            type="button"
+            onClick={() => setExportOpen(false)}
+            className="text-xs text-zinc-300 hover:text-zinc-600"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="mb-3 grid grid-cols-2 gap-1 rounded-lg bg-zinc-100 p-1">
+          <button
+            type="button"
+            onClick={() => setExportMode("new")}
+            className={`rounded-md px-2 py-1.5 text-xs font-medium ${exportMode === "new" ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-800"}`}
+          >
+            New
+          </button>
+          <button
+            type="button"
+            onClick={() => setExportMode("existing")}
+            disabled={testCases.length === 0}
+            className={`rounded-md px-2 py-1.5 text-xs font-medium disabled:opacity-40 ${exportMode === "existing" ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-800"}`}
+          >
+            Existing
+          </button>
+        </div>
+
+        {exportMode === "new" ? (
+          <input
+            value={exportName}
+            onChange={(e) => setExportName(e.target.value)}
+            placeholder="Test case name"
+            className={`${inputCls} mb-3 w-full py-1.5`}
+          />
+        ) : (
+          <select
+            value={targetTestCaseId}
+            onChange={(e) => setTargetTestCaseId(e.target.value)}
+            className={`${inputCls} mb-3 w-full py-1.5`}
+          >
+            <option value="">Select a test case</option>
+            {testCases.map((tc) => (
+              <option key={tc.id} value={tc.id}>{tc.name || "Untitled"}</option>
+            ))}
+          </select>
+        )}
+
+        {exportMessage && <p className="mb-2 text-xs text-red-600">{exportMessage}</p>}
+        <button
+          type="button"
+          onClick={exportToTestCase}
+          disabled={exportMode === "existing" && !targetTestCaseId}
+          className="w-full rounded-lg bg-zinc-900 px-3 py-2 text-xs font-medium text-white shadow-sm hover:bg-zinc-800 disabled:opacity-40"
+        >
+          {exportMode === "new" ? "Create test case" : "Update test case"}
+        </button>
+      </div>
+    </div>
+  ) : null;
 
   return (
     <div className="flex min-h-0 flex-1 gap-4">
@@ -719,59 +880,62 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
 
         {/* Actions */}
         <div className="flex gap-2 pb-4">
-          {/* Download session JSON */}
+          {/* Export / Save */}
           <div className="group relative">
             <button
               type="button"
-              onClick={downloadJson}
+              onClick={editTestCaseId ? saveToCurrentTestCase : openExportDialog}
               disabled={players.length === 0 || snapshots.length === 0}
               className="flex items-center justify-center rounded-lg border border-zinc-200 bg-white p-2 text-zinc-600 shadow-sm hover:bg-zinc-50 disabled:opacity-40"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                <polyline points="7 10 12 15 17 10"/>
-                <line x1="12" y1="15" x2="12" y2="3"/>
-              </svg>
+              {editTestCaseId ? (
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                  <polyline points="17 21 17 13 7 13 7 21"/>
+                  <polyline points="7 3 7 8 15 8"/>
+                </svg>
+              ) : (
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                  <polyline points="14 2 14 8 20 8"/>
+                  <line x1="12" y1="18" x2="12" y2="12"/>
+                  <line x1="9" y1="15" x2="15" y2="15"/>
+                </svg>
+              )}
             </button>
             <span className="pointer-events-none absolute bottom-full left-1/2 mb-1.5 -translate-x-1/2 whitespace-nowrap rounded-md bg-zinc-800 px-2 py-1 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100 z-50">
-              Download session JSON
+              {editTestCaseId ? "Save" : "Export"}
             </span>
           </div>
 
-          {/* Export as new test case */}
+          {/* Clear / Back */}
           <div className="group relative">
             <button
               type="button"
-              onClick={exportAsTestCase}
-              disabled={players.length === 0 || snapshots.length === 0}
-              className="flex items-center justify-center rounded-lg border border-zinc-200 bg-white p-2 text-zinc-600 shadow-sm hover:bg-zinc-50 disabled:opacity-40"
+              onClick={() => {
+                if (editTestCaseId) router.push(`/script-testing/test-cases/${editTestCaseId}`);
+                else clearState();
+              }}
+              className={`flex items-center justify-center rounded-lg border border-zinc-200 bg-white p-2 text-zinc-600 shadow-sm ${
+                editTestCaseId
+                  ? "hover:bg-zinc-50"
+                  : "hover:border-red-200 hover:bg-red-50 hover:text-red-600"
+              }`}
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                <polyline points="14 2 14 8 20 8"/>
-                <line x1="12" y1="18" x2="12" y2="12"/>
-                <line x1="9" y1="15" x2="15" y2="15"/>
-              </svg>
+              {editTestCaseId ? (
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M19 12H5"/>
+                  <path d="M12 19l-7-7 7-7"/>
+                </svg>
+              ) : (
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="3 6 5 6 21 6"/>
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                </svg>
+              )}
             </button>
             <span className="pointer-events-none absolute bottom-full left-1/2 mb-1.5 -translate-x-1/2 whitespace-nowrap rounded-md bg-zinc-800 px-2 py-1 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100 z-50">
-              Export as new test case
-            </span>
-          </div>
-
-          {/* Clear */}
-          <div className="group relative">
-            <button
-              type="button"
-              onClick={clearState}
-              className="flex items-center justify-center rounded-lg border border-zinc-200 bg-white p-2 text-zinc-600 shadow-sm hover:bg-red-50 hover:text-red-600 hover:border-red-200"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="3 6 5 6 21 6"/>
-                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-              </svg>
-            </button>
-            <span className="pointer-events-none absolute bottom-full left-1/2 mb-1.5 -translate-x-1/2 whitespace-nowrap rounded-md bg-zinc-800 px-2 py-1 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100 z-50">
-              Clear
+              {editTestCaseId ? "Back" : "Clear"}
             </span>
           </div>
         </div>
@@ -789,19 +953,32 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
             onMapClick={handleMapClick}
             onViewChange={(center, zoom) => {
               mapViewRef.current = { center, zoom };
+              if (editTestCaseId) return;
               try {
                 const raw = window.localStorage.getItem(STORAGE_KEY);
-                if (raw) {
-                  const parsed = JSON.parse(raw);
-                  parsed.mapCenter = center;
-                  parsed.mapZoom = zoom;
-                  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
-                }
+                const parsed = raw
+                  ? JSON.parse(raw)
+                  : {
+                      selectedCourseId,
+                      selectedCourseName,
+                      groups,
+                      players,
+                      snapshots,
+                      locations,
+                      activeSnapshotIdx,
+                      courseHoles,
+                      courseLandmarks,
+                      courseCartPaths,
+                    };
+                parsed.mapCenter = center;
+                parsed.mapZoom = zoom;
+                window.localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
               } catch { /* ignore */ }
             }}
           />
         )}
       </div>
+      {exportModal}
     </div>
   );
 }

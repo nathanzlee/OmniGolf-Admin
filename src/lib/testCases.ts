@@ -44,6 +44,23 @@ export type TestCaseLandmark = {
   endpoint2Lng?: number;
 };
 
+export type LocationDataPlayer = {
+  localId: string;
+  name: string;
+  groupId: string | null;
+  usingCarts?: boolean;
+  locations: { lat: number; lng: number; timestamp: string }[];
+};
+
+export type LocationData = {
+  courseId: string;
+  courseName: string;
+  holes: TestCaseHole[];
+  landmarks: TestCaseLandmark[];
+  groups: TestCaseGroup[];
+  players: LocationDataPlayer[];
+};
+
 export type TestCase = {
   id: string;
   name: string;
@@ -56,13 +73,20 @@ export type TestCase = {
   pacingRows: TestCasePacingRow[];
   events: TestCaseEventRow[];
   sessionJson: string;
+  locationData: LocationData | null;
   createdAt: string;
   updatedAt: string;
 };
 
 export type LandmarkOption = { value: string; label: string };
 
+type JsonRecord = Record<string, unknown>;
+
 const LS_KEY = "omnigolf-test-cases-v1";
+
+function makeId() {
+  return Math.random().toString(36).slice(2);
+}
 
 const LANDMARK_LABELS: Record<string, string> = {
   putting_green: "Putting Green",
@@ -99,6 +123,15 @@ export function removeTestCase(id: string): void {
   saveTestCases(loadTestCases().filter((c) => c.id !== id));
 }
 
+export function setTestCaseLocationData(id: string, data: LocationData): void {
+  const cases = loadTestCases();
+  const idx = cases.findIndex((c) => c.id === id);
+  if (idx >= 0) {
+    cases[idx] = { ...cases[idx], locationData: data, updatedAt: new Date().toISOString() };
+    saveTestCases(cases);
+  }
+}
+
 export function buildLandmarkOptions(
   holes: TestCaseHole[],
   landmarks: TestCaseLandmark[]
@@ -131,19 +164,78 @@ export function buildLandmarkOptions(
 
 export function testCaseToExportJson(tc: TestCase): object {
   // Use uploaded session JSON as the base, then overlay pacing/events
-  let base: any = {};
+  let base: JsonRecord = {};
   try {
-    if (tc.sessionJson) base = JSON.parse(tc.sessionJson);
+    if (tc.sessionJson) {
+      const parsed = JSON.parse(tc.sessionJson);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        base = parsed as JsonRecord;
+      }
+    }
   } catch {
     /* ignore parse errors */
   }
 
+  if (tc.locationData) {
+    const locationData = tc.locationData;
+    base = {
+      version: 1,
+      exported_at: new Date().toISOString(),
+      session_id: tc.id,
+      session_name: tc.name,
+      course_id: locationData.courseId || "",
+      course_name: locationData.courseName || "",
+      holes: locationData.holes.map((h) => ({
+        hole_number: h.holeNumber,
+        tee_lat: h.teeLat,
+        tee_lng: h.teeLng,
+        green_lat: h.greenLat,
+        green_lng: h.greenLng,
+        allotted_time: h.allottedTime,
+      })),
+      course_landmarks: locationData.landmarks.map((l) => ({
+        id: l.id,
+        landmark_type: l.landmarkType,
+        latitude: l.endpoint1Lat,
+        longitude: l.endpoint1Lng,
+        endpoint1_latitude: l.endpoint1Lat,
+        endpoint1_longitude: l.endpoint1Lng,
+        ...(l.endpoint2Lat != null
+          ? {
+              endpoint2_latitude: l.endpoint2Lat,
+              endpoint2_longitude: l.endpoint2Lng,
+            }
+          : {}),
+      })),
+      groups: locationData.groups.map((g) => ({
+        group_id: g.localId,
+        label: g.label,
+        tee_time: g.teeTime ? new Date(g.teeTime).toISOString() : null,
+        players: locationData.players
+          .filter((p) => p.groupId === g.localId)
+          .map((p) => ({ user_id: p.localId, using_carts: p.usingCarts ?? false })),
+      })),
+      players: locationData.players.map((p) => ({
+        user_id: p.localId,
+        email: p.name || p.localId,
+        using_carts: p.usingCarts ?? false,
+        locations: p.locations.map((loc) => ({
+          id: makeId(),
+          recorded_at: new Date(loc.timestamp).toISOString(),
+          latitude: loc.lat,
+          longitude: loc.lng,
+          horizontal_accuracy: null,
+        })),
+      })),
+    };
+  }
+
   // Group label map from the base JSON's groups
-  const jsonGroups: any[] = base.groups ?? [];
+  const jsonGroups = Array.isArray(base.groups) ? base.groups : [];
   const groupLabelMap = new Map<string, string>(
-    jsonGroups.map((g: any) => [
-      String(g.group_id ?? g.id ?? ""),
-      String(g.label ?? ""),
+    jsonGroups.map((g) => [
+      String((g as JsonRecord).group_id ?? (g as JsonRecord).id ?? ""),
+      String((g as JsonRecord).label ?? ""),
     ])
   );
 

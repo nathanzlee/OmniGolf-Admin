@@ -234,8 +234,14 @@ function computeEventMetrics(
 
     let assignmentCaught: any[] = [];
     let pacingCaught: any[] = [];
-    try { assignmentCaught = JSON.parse(assignmentJsonMap.get("caught_events.json") ?? "[]"); } catch { /* ignore */ }
-    try { pacingCaught = JSON.parse(pacingJsonMap.get("caught_events.json") ?? "[]"); } catch { /* ignore */ }
+    try {
+      const assignmentKey = [...assignmentJsonMap.keys()].find((k) => k.includes("caught_events")) ?? "";
+      assignmentCaught = JSON.parse(assignmentJsonMap.get(assignmentKey) ?? "[]");
+    } catch { /* ignore */ }
+    try {
+      const pacingKey = [...pacingJsonMap.keys()].find((k) => k.includes("caught_events")) ?? "";
+      pacingCaught = JSON.parse(pacingJsonMap.get(pacingKey) ?? "[]");
+    } catch { /* ignore */ }
 
     // Build group_id → label from the session JSON groups (same data the scripts see)
     const groupIdToLabel = new Map<string, string>(
@@ -270,7 +276,7 @@ function computeEventMetrics(
           const hit = assignmentCaught.find((c: any) => {
             if (normalizeEventType(c.event ?? "") !== evType) return false;
             // Prefer hole_number match (unambiguous), then fall back to group label
-            if (landmarkHole != null && c.hole_number != null) return c.hole_number === landmarkHole;
+            if (landmarkHole != null && c.hole_number != null) return Number(c.hole_number) === landmarkHole;
             const cGroup = (c.group ?? "").trim().toLowerCase();
             const evGroup = (groupLabel ?? "").trim().toLowerCase();
             return cGroup.length > 0 && evGroup.length > 0 && cGroup === evGroup;
@@ -1064,6 +1070,7 @@ export default function ScriptTester({
         } catch {
           const errResult: ScriptResult = {
             csvFiles: [],
+            jsonFiles: [],
             stdout: "",
             stderr: "",
             error: "Failed to load session export",
@@ -1119,6 +1126,7 @@ export default function ScriptTester({
       } catch (err: any) {
         const errResult: ScriptResult = {
           csvFiles: [],
+          jsonFiles: [],
           stdout: "",
           stderr: "",
           error: err?.message ?? "Request failed",

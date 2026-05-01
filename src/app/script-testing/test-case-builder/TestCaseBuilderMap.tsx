@@ -47,6 +47,26 @@ function ViewHandler({ target }: { target: ViewTarget | null }) {
   return null;
 }
 
+function InitialViewHandler({
+  center,
+  zoom,
+}: {
+  center: [number, number];
+  zoom: number;
+}) {
+  const map = useMap();
+  const lastView = useRef("");
+
+  useEffect(() => {
+    const key = `${center[0]},${center[1]},${zoom}`;
+    if (lastView.current === key) return;
+    lastView.current = key;
+    map.setView(center, zoom, { animate: false });
+  }, [center, map, zoom]);
+
+  return null;
+}
+
 function MoveHandler({
   onViewChange,
 }: {
@@ -118,6 +138,7 @@ export default function TestCaseBuilderMap({
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
+        <InitialViewHandler center={initialCenter} zoom={initialZoom} />
         <ViewHandler target={viewTarget ?? null} />
         <MoveHandler onViewChange={onViewChange} />
         <ClickHandler active={isPlacing} onMapClick={onMapClick} />

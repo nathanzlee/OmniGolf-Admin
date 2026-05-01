@@ -396,9 +396,9 @@ export default function SessionVisualizer({ completedSessions }: { completedSess
         setMapCenterOverride(null);
         setMapZoomOverride(null);
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
       setData(null);
-      setError(e?.message ?? "Failed to parse JSON.");
+      setError(e instanceof Error ? e.message : "Failed to parse JSON.");
     }
   }
 
@@ -411,8 +411,8 @@ export default function SessionVisualizer({ completedSessions }: { completedSess
       const text = JSON.stringify(await res.json(), null, 2);
       setJsonText(text);
       loadParsedJson(text);
-    } catch (e: any) {
-      setError(e?.message ?? "Failed to load session.");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to load session.");
     } finally {
       setIsLoadingSession(false);
     }
@@ -550,6 +550,7 @@ export default function SessionVisualizer({ completedSessions }: { completedSess
                     pacingRows: [],
                     events: [],
                     sessionJson: jsonText,
+                    locationData: null,
                     createdAt: new Date().toISOString(),
                     updatedAt: new Date().toISOString(),
                   });

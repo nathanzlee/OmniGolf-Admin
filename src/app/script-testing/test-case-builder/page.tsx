@@ -1,6 +1,7 @@
 import AdminNav from "@/components/AdminNav";
 import ScriptTestingSubnav from "../ScriptTestingSubnav";
 import TestCaseBuilder from "./TestCaseBuilder";
+import { Suspense } from "react";
 import { listCoursesForSelect } from "@/app/actions";
 
 export default async function TestCaseBuilderPage() {
@@ -19,7 +20,9 @@ export default async function TestCaseBuilderPage() {
             Create groups and players, then click the map to place player locations with timestamps.
           </p>
         </div>
-        <TestCaseBuilder courseOptions={courseOptions} />
+        <Suspense>
+          <TestCaseBuilder courseOptions={courseOptions} />
+        </Suspense>
       </div>
     </main>
   );

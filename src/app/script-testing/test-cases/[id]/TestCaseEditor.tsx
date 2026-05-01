@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import AdminNav from "@/components/AdminNav";
@@ -12,6 +12,7 @@ import {
   TestCaseEventRow,
   TestCaseHole,
   TestCaseLandmark,
+  LocationData,
   LandmarkOption,
   PacingEventType,
   TestCaseEventType,
@@ -38,10 +39,6 @@ const inputClass =
 const thClass =
   "border-b border-zinc-200 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-zinc-600";
 
-function makeId() {
-  return Math.random().toString(36).slice(2);
-}
-
 function SectionHeader({
   title,
   open,
@@ -63,49 +60,8 @@ function SectionHeader({
   );
 }
 
-// Parse groups, holes, and landmarks out of a session export JSON
-function parseSessionJson(json: string): {
-  groups: TestCaseGroup[];
-  holes: TestCaseHole[];
-  landmarks: TestCaseLandmark[];
-  courseName: string | null;
-} {
-  try {
-    const data = JSON.parse(json);
-    const groups: TestCaseGroup[] = (data.groups ?? []).map((g: any) => ({
-      localId: String(g.group_id ?? g.id ?? makeId()),
-      label: g.label ?? "",
-      teeTime: g.tee_time
-        ? new Date(g.tee_time).toISOString().slice(0, 16)
-        : "",
-    }));
-    const holes: TestCaseHole[] = (data.holes ?? []).map((h: any) => ({
-      holeNumber: h.hole_number,
-      teeLat: h.tee_lat,
-      teeLng: h.tee_lng,
-      greenLat: h.green_lat,
-      greenLng: h.green_lng,
-      allottedTime: h.allotted_time,
-    }));
-    const landmarks: TestCaseLandmark[] = (data.course_landmarks ?? []).map(
-      (l: any) => ({
-        id: l.id ?? makeId(),
-        landmarkType: l.landmark_type,
-        endpoint1Lat: l.endpoint1_latitude ?? l.latitude,
-        endpoint1Lng: l.endpoint1_longitude ?? l.longitude,
-        ...(l.endpoint2_latitude != null
-          ? {
-              endpoint2Lat: l.endpoint2_latitude,
-              endpoint2Lng: l.endpoint2_longitude,
-            }
-          : {}),
-      })
-    );
-    const courseName: string | null = data.course_name ?? null;
-    return { groups, holes, landmarks, courseName };
-  } catch {
-    return { groups: [], holes: [], landmarks: [], courseName: null };
-  }
+function makeId() {
+  return Math.random().toString(36).slice(2);
 }
 
 export default function TestCaseEditor({
@@ -115,13 +71,13 @@ export default function TestCaseEditor({
   courses?: { id: string; name: string }[];
 }) {
   const router = useRouter();
-  const jsonInputRef = useRef<HTMLInputElement>(null);
 
   const [name, setName] = useState("New Test Case");
   const [description, setDescription] = useState("");
-  const [sessionJson, setSessionJson] = useState("");
-  const [sessionJsonName, setSessionJsonName] = useState<string | null>(null);
+  const [courseId, setCourseId] = useState<string | null>(null);
   const [courseName, setCourseName] = useState<string | null>(null);
+  const [sessionJson, setSessionJson] = useState("");
+  const [locationData, setLocationData] = useState<LocationData | null>(null);
   const [groups, setGroups] = useState<TestCaseGroup[]>([]);
   const [holes, setHoles] = useState<TestCaseHole[]>([]);
   const [landmarks, setLandmarks] = useState<TestCaseLandmark[]>([]);
@@ -133,6 +89,7 @@ export default function TestCaseEditor({
   const [loaded, setLoaded] = useState(false);
   const [sectionsOpen, setSectionsOpen] = useState({
     config: true,
+    locationData: true,
     groupPacing: true,
     events: true,
   });
@@ -143,18 +100,15 @@ export default function TestCaseEditor({
     if (tc) {
       setName(tc.name);
       setDescription(tc.description ?? "");
-      setSessionJson(tc.sessionJson ?? "");
+      setCourseId(tc.courseId ?? null);
       setCourseName(tc.courseName ?? null);
+      setSessionJson(tc.sessionJson ?? "");
+      setLocationData(tc.locationData ?? null);
       setGroups(tc.groups);
       setHoles(tc.holes);
       setLandmarks(tc.landmarks);
       setPacingRows(tc.pacingRows);
       setEvents(tc.events);
-      // Recover file name hint from JSON if present
-      try {
-        const parsed = JSON.parse(tc.sessionJson ?? "");
-        if (parsed?.session_name) setSessionJsonName(parsed.session_name);
-      } catch { /* ignore */ }
     }
     setLoaded(true);
   }, [id]);
@@ -214,29 +168,6 @@ export default function TestCaseEditor({
       }
     }
     return gs;
-  }
-
-  // ── JSON upload ────────────────────────────────────────────────────────────
-
-  function handleJsonUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const text = reader.result as string;
-      setSessionJson(text);
-      setSessionJsonName(file.name);
-      const parsed = parseSessionJson(text);
-      setGroups(parsed.groups);
-      setHoles(parsed.holes);
-      setLandmarks(parsed.landmarks);
-      if (parsed.courseName) setCourseName(parsed.courseName);
-      // Clear landmark references in existing pacing/events rows
-      setPacingRows((prev) => prev.map((r) => ({ ...r, landmark: "" })));
-      setEvents((prev) => prev.map((ev) => ({ ...ev, landmark: "" })));
-    };
-    reader.readAsText(file);
-    e.currentTarget.value = "";
   }
 
   // ── Pacing rows ─────────────────────────────────────────────────────────────
@@ -319,7 +250,7 @@ export default function TestCaseEditor({
       id,
       name: name.trim() || "Untitled Test Case",
       description,
-      courseId: null,
+      courseId,
       courseName,
       holes,
       landmarks,
@@ -327,6 +258,7 @@ export default function TestCaseEditor({
       pacingRows: pacingRows.filter((r) => r.eventType !== "").map((r) => r as TestCasePacingRow),
       events: events.filter((e) => e.eventType !== "").map((e) => e as TestCaseEventRow),
       sessionJson,
+      locationData: existing?.locationData ?? locationData ?? null,
       createdAt: existing?.createdAt ?? new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -338,8 +270,8 @@ export default function TestCaseEditor({
     try {
       upsertTestCase(buildTestCase());
       setMessage("✅ Saved.");
-    } catch (e: any) {
-      setMessage(`❌ ${e?.message ?? "Failed to save."}`);
+    } catch (e: unknown) {
+      setMessage(`❌ ${e instanceof Error ? e.message : "Failed to save."}`);
     } finally {
       setIsSaving(false);
     }
@@ -372,7 +304,7 @@ export default function TestCaseEditor({
           <div>
             <h1 className="text-xl font-semibold text-zinc-900">Edit Test Case</h1>
             <p className="mt-1 text-sm text-zinc-600">
-              Upload a session JSON, then record actual pacing and events for comparison.
+              Configure location data, pacing, and events for script comparison.
             </p>
           </div>
           <div className="flex gap-2">
@@ -426,61 +358,107 @@ export default function TestCaseEditor({
               />
             </div>
 
-            <hr className="mb-6 border-zinc-200" />
+          </div>
+        )}
 
-            {/* Session JSON upload */}
-            <div className="mb-2">
-              <h3 className="mb-1 text-sm font-semibold text-zinc-900">Session JSON</h3>
-              <p className="mb-3 text-xs text-zinc-600">
-                Upload a session export JSON. Groups, holes, and landmarks will be
-                loaded from it automatically.
-              </p>
+        {/* ── Location Data ──────────────────────────────────────────── */}
+        <div className="mb-3">
+          <SectionHeader
+            title="Location Data"
+            open={sectionsOpen.locationData}
+            onToggle={() => setSectionsOpen((p) => ({ ...p, locationData: !p.locationData }))}
+          />
+        </div>
 
-              {sessionJson ? (
-                <div className="flex items-center justify-between rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2">
-                  <div>
-                    <span className="font-mono text-xs text-zinc-800">
-                      {sessionJsonName ?? "session.json"}
+        {sectionsOpen.locationData && (
+          <div className="mb-6 rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
+            {locationData ? (
+              <div>
+                <div className="mb-3 flex flex-wrap gap-4">
+                  {locationData.courseId && (
+                    <span className="text-xs text-zinc-600">
+                      <span className="font-medium text-zinc-500">Course ID: </span>
+                      <span className="font-mono">{locationData.courseId}</span>
                     </span>
-                    {courseName && (
-                      <span className="ml-2 text-xs text-zinc-500">— {courseName}</span>
-                    )}
-                    {groups.length > 0 && (
-                      <span className="ml-2 text-xs text-zinc-500">
-                        · {groups.length} group{groups.length !== 1 ? "s" : ""}
-                      </span>
-                    )}
-                    {holeOptions.length > 0 && (
-                      <span className="ml-2 text-xs text-zinc-500">
-                        · {holeOptions.length} hole{holeOptions.length !== 1 ? "s" : ""}
-                      </span>
-                    )}
+                  )}
+                  {locationData.courseName && (
+                    <span className="text-xs text-zinc-600">
+                      <span className="font-medium text-zinc-500">Course: </span>
+                      {locationData.courseName}
+                    </span>
+                  )}
+                  <span className="text-xs text-zinc-600">
+                    <span className="font-medium text-zinc-500">Groups: </span>
+                    {locationData.groups.length}
+                  </span>
+                  <span className="text-xs text-zinc-600">
+                    <span className="font-medium text-zinc-500">Players: </span>
+                    {locationData.players.length}
+                  </span>
+                  <span className="text-xs text-zinc-600">
+                    <span className="font-medium text-zinc-500">Locations: </span>
+                    {locationData.players.reduce((sum, p) => sum + p.locations.length, 0)}
+                  </span>
+                </div>
+                {locationData.players.length > 0 && (
+                  <div className="mb-3 overflow-x-auto rounded-lg border border-zinc-100">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="bg-zinc-50">
+                          <th className="px-3 py-2 text-left font-semibold text-zinc-500">Player</th>
+                          <th className="px-3 py-2 text-left font-semibold text-zinc-500">Group</th>
+                          <th className="px-3 py-2 text-left font-semibold text-zinc-500">Locations</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {locationData.players.map((p, pi) => {
+                          const grp = locationData.groups.find((g) => g.localId === p.groupId);
+                          return (
+                            <tr key={p.localId ?? pi} className="border-t border-zinc-100">
+                              <td className="px-3 py-1.5 text-zinc-800">{p.name || p.localId || "—"}</td>
+                              <td className="px-3 py-1.5 text-zinc-600">{grp?.label ?? "—"}</td>
+                              <td className="px-3 py-1.5 text-zinc-600">{p.locations.length}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
                   </div>
+                )}
+                <div className="flex gap-2">
+                  <a
+                    href={`/script-testing/test-case-builder?tcId=${id}`}
+                    className="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-sm hover:bg-zinc-50"
+                  >
+                    Edit in Test Case Builder
+                  </a>
                   <button
                     type="button"
-                    onClick={() => jsonInputRef.current?.click()}
-                    className="ml-3 shrink-0 rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs text-zinc-700 hover:bg-zinc-50"
+                    onClick={() => {
+                      if (!confirm("Clear location data?")) return;
+                      setLocationData(null);
+                      const existing = loadTestCases().find((t) => t.id === id);
+                      if (existing) upsertTestCase({ ...existing, locationData: null, updatedAt: new Date().toISOString() });
+                    }}
+                    className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100"
                   >
-                    Replace
+                    Clear
                   </button>
                 </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => jsonInputRef.current?.click()}
-                  className="w-full rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-4 py-4 text-center text-sm text-zinc-500 hover:bg-zinc-100"
+              </div>
+            ) : (
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-zinc-500">
+                  No location data set. Use the Test Case Builder to add players and locations.
+                </p>
+                <a
+                  href={`/script-testing/test-case-builder?tcId=${id}`}
+                  className="ml-4 shrink-0 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-sm hover:bg-zinc-50"
                 >
-                  Click to upload session JSON
-                </button>
-              )}
-              <input
-                ref={jsonInputRef}
-                type="file"
-                accept=".json,application/json"
-                className="hidden"
-                onChange={handleJsonUpload}
-              />
-            </div>
+                  Go to Test Case Builder
+                </a>
+              </div>
+            )}
           </div>
         )}
 
