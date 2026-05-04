@@ -12,6 +12,8 @@ export type LocationPin = {
   color: string;
   isActivePlayer: boolean;
   playerName: string;
+  kind?: "current" | "previous";
+  playerId?: string;
 };
 
 export type ViewTarget = {
@@ -19,7 +21,16 @@ export type ViewTarget = {
   latlngs: [number, number][];
 };
 
-function makeLocationIcon(color: string, isActivePlayer: boolean) {
+function makeLocationIcon(color: string, isActivePlayer: boolean, kind: LocationPin["kind"] = "current") {
+  if (kind === "previous") {
+    return L.divIcon({
+      className: "",
+      html: `<div style="width:18px;height:18px;border-radius:9999px;background:white;border:3px dashed ${color};box-shadow:0 1px 4px rgba(0,0,0,0.35)"></div>`,
+      iconSize: [18, 18],
+      iconAnchor: [9, 9],
+    });
+  }
+
   const size = isActivePlayer ? 20 : 12;
   const anchor = size / 2;
   return L.divIcon({
@@ -104,6 +115,7 @@ export default function TestCaseBuilderMap({
   initialCenter = [39.5, -98.35],
   initialZoom = 4,
   onMapClick,
+  onPreviousPinClick,
   onViewChange,
 }: {
   pins: LocationPin[];
@@ -112,6 +124,7 @@ export default function TestCaseBuilderMap({
   initialCenter?: [number, number];
   initialZoom?: number;
   onMapClick: (lat: number, lng: number) => void;
+  onPreviousPinClick?: (playerId: string) => void;
   onViewChange?: (center: [number, number], zoom: number) => void;
 }) {
   useEffect(() => {
@@ -146,10 +159,17 @@ export default function TestCaseBuilderMap({
           <Marker
             key={pin.id}
             position={[pin.lat, pin.lng]}
-            icon={makeLocationIcon(pin.color, pin.isActivePlayer)}
+            icon={makeLocationIcon(pin.color, pin.isActivePlayer, pin.kind)}
+            eventHandlers={
+              pin.kind === "previous" && pin.playerId
+                ? { click: () => onPreviousPinClick?.(pin.playerId!) }
+                : undefined
+            }
           >
             <Tooltip direction="top" offset={[0, -8]} opacity={0.9}>
-              <span className="text-xs font-semibold">{pin.playerName}</span>
+              <span className="text-xs font-semibold">
+                {pin.kind === "previous" ? `${pin.playerName} previous` : pin.playerName}
+              </span>
             </Tooltip>
           </Marker>
         ))}

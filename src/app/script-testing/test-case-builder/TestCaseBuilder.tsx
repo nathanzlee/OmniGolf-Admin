@@ -408,9 +408,12 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
   const canAddSnapshot =
     snapshots.length === 0 ||
     !snapshots.some((s) => timestampsMatch(s.timestamp, nextManualSnapshotTs));
+  const canUsePreviousForAll =
+    !!activeSnapshot &&
+    players.some((player) => !isBlockedAtSnapshot(activeSnapshot, player) && getPreviousPlayerLoc(player.localId));
 
   const pins = useMemo<LocationPin[]>(() => {
-    return filteredPlayers.flatMap((player) => {
+    const currentPins = players.flatMap((player) => {
       const loc = snapshotLocs.find((l) => l.playerId === player.localId);
       if (!loc) return [];
       return [{
@@ -420,10 +423,30 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
         color: playerColor(player),
         isActivePlayer: player.localId === activePlayerId,
         playerName: player.name || "Player",
+        kind: "current" as const,
       }];
     });
+
+    if (!activePlayerId || !isPlacing) return currentPins;
+    const activePlayer = players.find((p) => p.localId === activePlayerId);
+    const prevLoc = getPreviousPlayerLoc(activePlayerId);
+    if (!activePlayer || !prevLoc) return currentPins;
+
+    return [
+      ...currentPins,
+      {
+        id: `previous-${activePlayerId}-${activeSnapshot?.localId ?? "snapshot"}`,
+        lat: prevLoc.lat,
+        lng: prevLoc.lng,
+        color: playerColor(activePlayer),
+        isActivePlayer: false,
+        playerName: activePlayer.name || "Player",
+        kind: "previous" as const,
+        playerId: activePlayer.localId,
+      },
+    ];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredPlayers, snapshotLocs, activePlayerId, groupColorMap]);
+  }, [players, snapshotLocs, activePlayerId, groupColorMap, isPlacing, activeSnapshotIdx]);
 
   // ── Course ────────────────────────────────────────────────────
 
@@ -613,6 +636,7 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
       ...prev.filter((l) => !(l.snapshotId === activeSnapshot.localId && l.playerId === activePlayerId)),
       { localId: makeId(), snapshotId: activeSnapshot.localId, playerId: activePlayerId, lat, lng },
     ]);
+    setActivePlayerId(getNextPlaceablePlayerId(activePlayerId));
   }
 
   function clearPlayerLoc(playerId: string) {
@@ -631,6 +655,16 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
     return null;
   }
 
+  function getNextPlaceablePlayerId(currentPlayerId: string): string | null {
+    if (!activeSnapshot || players.length === 0) return currentPlayerId;
+    const currentIdx = Math.max(0, players.findIndex((p) => p.localId === currentPlayerId));
+    for (let offset = 1; offset <= players.length; offset += 1) {
+      const next = players[(currentIdx + offset) % players.length];
+      if (!isBlockedAtSnapshot(activeSnapshot, next)) return next.localId;
+    }
+    return currentPlayerId;
+  }
+
   function applyPreviousPlayerLoc(playerId: string) {
     if (!activeSnapshot) return;
     const prevLoc = getPreviousPlayerLoc(playerId);
@@ -644,6 +678,29 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
         lat: prevLoc.lat,
         lng: prevLoc.lng,
       },
+    ]);
+    setActivePlayerId(getNextPlaceablePlayerId(playerId));
+  }
+
+  function applyPreviousLocsForAllPlayers() {
+    if (!activeSnapshot) return;
+    const nextLocs = players.flatMap((player) => {
+      if (isBlockedAtSnapshot(activeSnapshot, player)) return [];
+      const prevLoc = getPreviousPlayerLoc(player.localId);
+      if (!prevLoc) return [];
+      return [{
+        localId: makeId(),
+        snapshotId: activeSnapshot.localId,
+        playerId: player.localId,
+        lat: prevLoc.lat,
+        lng: prevLoc.lng,
+      }];
+    });
+    if (nextLocs.length === 0) return;
+    const playerIds = new Set(nextLocs.map((loc) => loc.playerId));
+    setLocations((prev) => [
+      ...prev.filter((loc) => !(loc.snapshotId === activeSnapshot.localId && playerIds.has(loc.playerId))),
+      ...nextLocs,
     ]);
   }
 
@@ -1053,6 +1110,19 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
                 </button>
               </div>
 
+              {players.length > 0 && (
+                <div className="flex items-center justify-end border-b border-zinc-100 px-3 py-2">
+                  <button
+                    type="button"
+                    onClick={applyPreviousLocsForAllPlayers}
+                    disabled={!canUsePreviousForAll}
+                    className="rounded border border-zinc-200 bg-white px-2 py-1 text-xs font-medium text-zinc-500 hover:bg-zinc-50 hover:text-zinc-800 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Use previous for all
+                  </button>
+                </div>
+              )}
+
               {/* Player rows */}
               {players.length === 0 ? (
                 <p className="px-4 py-3 text-xs text-zinc-400">Add players first.</p>
@@ -1204,6 +1274,7 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
             initialCenter={mapInitView?.center ?? [39.5, -98.35]}
             initialZoom={mapInitView?.zoom ?? 4}
             onMapClick={handleMapClick}
+            onPreviousPinClick={applyPreviousPlayerLoc}
             onViewChange={(center, zoom) => {
               mapViewRef.current = { center, zoom };
               try {
