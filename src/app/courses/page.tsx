@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { listCourses } from "../actions";
 import AdminNav from "@/components/AdminNav";
+import { EditIcon } from "@/components/ActionIcons";
 
 export default async function CoursesPage() {
   const courses = await listCourses();
@@ -61,9 +62,11 @@ export default async function CoursesPage() {
                       <td className="border-b border-zinc-100 px-4 py-3 text-right">
                         <Link
                           href={`/courses/build?courseId=${c.id}`}
-                          className="text-sm font-medium text-zinc-900 underline decoration-zinc-300 hover:decoration-zinc-600"
+                          aria-label="Edit"
+                          title="Edit"
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-200 bg-white text-zinc-700 shadow-sm hover:bg-zinc-50"
                         >
-                          Edit
+                          <EditIcon />
                         </Link>
                       </td>
                     </tr>
@@ -74,7 +77,7 @@ export default async function CoursesPage() {
           </div>
 
           <div className="px-4 py-3 text-xs text-zinc-500">
-            Click “Edit” to update hole coordinates, cart paths, and landmarks.
+            Use the edit action to update hole coordinates, cart paths, and landmarks.
           </div>
         </div>
       </div>

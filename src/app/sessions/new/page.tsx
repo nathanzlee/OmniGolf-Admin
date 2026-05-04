@@ -22,6 +22,7 @@ type GroupRow = {
   localId: string;
   label: string;
   teeTime: string;
+  startHole: number;
   players: { userId: string; usingCarts: boolean }[];
 };
 
@@ -81,7 +82,7 @@ export default function NewSessionPage() {
   function addGroup() {
     setGroups((prev) => [
       ...prev,
-      { localId: makeLocalId(), label: "", teeTime: "", players: [] },
+      { localId: makeLocalId(), label: "", teeTime: "", startHole: 1, players: [] },
     ]);
   }
 
@@ -92,6 +93,12 @@ export default function NewSessionPage() {
   function updateGroup(localId: string, field: "label" | "teeTime", value: string) {
     setGroups((prev) =>
       prev.map((g) => (g.localId === localId ? { ...g, [field]: value } : g))
+    );
+  }
+
+  function updateGroupStartHole(localId: string, startHole: number) {
+    setGroups((prev) =>
+      prev.map((g) => (g.localId === localId ? { ...g, startHole } : g))
     );
   }
 
@@ -139,6 +146,7 @@ export default function NewSessionPage() {
     return groups.map((g) => ({
       label: g.label.trim() || undefined,
       teeTime: g.teeTime ? new Date(g.teeTime).toISOString() : undefined,
+      startHole: g.startHole,
       players: g.players,
     }));
   }
@@ -314,6 +322,23 @@ export default function NewSessionPage() {
                       }
                       className={inputClass + " w-full max-w-sm"}
                     />
+                  </div>
+
+                  <div className="mb-3">
+                    <label className="mb-2 block text-sm font-medium text-zinc-700">
+                      Start hole
+                    </label>
+                    <select
+                      value={group.startHole}
+                      onChange={(e) => updateGroupStartHole(group.localId, Number(e.target.value))}
+                      className={inputClass + " w-full max-w-sm"}
+                    >
+                      {Array.from({ length: 18 }, (_, i) => i + 1).map((hole) => (
+                        <option key={hole} value={hole}>
+                          Hole {hole}
+                        </option>
+                      ))}
+                    </select>
                   </div>
 
                   <div className="mb-3">

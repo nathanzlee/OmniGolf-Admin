@@ -99,7 +99,7 @@ export async function GET(
 
     const { data: groups, error: groupsError } = await supabase
       .from("session_groups")
-      .select("id, label, tee_time")
+      .select("id, label, tee_time, start_hole")
       .eq("session_id", sessionId)
       .order("created_at", { ascending: true });
 
@@ -161,6 +161,7 @@ export async function GET(
       group_id: group.id,
       label: group.label,
       tee_time: group.tee_time,
+      start_hole: group.start_hole ?? 1,
       players: (groupPlayers ?? [])
         .filter((gp: any) => gp.group_id === group.id)
         .map((gp: any) => ({ user_id: gp.user_id, using_carts: gp.using_carts ?? false })),

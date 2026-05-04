@@ -27,6 +27,7 @@ type Group = {
   group_id: string;
   label?: string | null;
   tee_time?: string | null;
+  start_hole?: number | null;
   players?: { user_id: string; using_carts: boolean }[];
   /** @deprecated use players */
   player_user_ids?: string[];

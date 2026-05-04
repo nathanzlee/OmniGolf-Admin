@@ -15,6 +15,7 @@ import {
   UserSelectOption,
 } from "../../actions";
 import AdminNav from "@/components/AdminNav";
+import { DownloadIcon, TrashIcon } from "@/components/ActionIcons";
 import { useRouter } from "next/navigation";
 
 type CourseOption = {
@@ -26,6 +27,7 @@ type GroupRow = {
   localId: string;
   label: string;
   teeTime: string;
+  startHole: number;
   players: { userId: string; usingCarts: boolean }[];
 };
 
@@ -124,6 +126,7 @@ function buildInitialGroups(
     localId: g.id,
     label: g.label ?? "",
     teeTime: formatForDatetimeLocal(g.tee_time),
+    startHole: g.start_hole ?? 1,
     players: groupPlayers
       .filter((p) => p.group_id === g.id)
       .map((p) => ({ userId: p.user_id, usingCarts: p.using_carts })),
@@ -284,8 +287,8 @@ export default function SessionEditor({
         if (g) {
           gs = gs.filter((x) => x.localId !== ev.groupId);
           gs.push(
-            { localId: `${ev.groupId}-a`, label: `${g.label}a`, teeTime: g.teeTime, players: [] },
-            { localId: `${ev.groupId}-b`, label: `${g.label}b`, teeTime: g.teeTime, players: [] }
+            { localId: `${ev.groupId}-a`, label: `${g.label}a`, teeTime: g.teeTime, startHole: g.startHole, players: [] },
+            { localId: `${ev.groupId}-b`, label: `${g.label}b`, teeTime: g.teeTime, startHole: g.startHole, players: [] }
           );
         }
       } else if (ev.eventType === "group join") {
@@ -388,7 +391,7 @@ export default function SessionEditor({
   function addGroup() {
     setGroups((prev) => [
       ...prev,
-      { localId: makeLocalId(), label: "", teeTime: "", players: [] },
+      { localId: makeLocalId(), label: "", teeTime: "", startHole: 1, players: [] },
     ]);
   }
 
@@ -399,6 +402,12 @@ export default function SessionEditor({
   function updateGroup(localId: string, field: "label" | "teeTime", value: string) {
     setGroups((prev) =>
       prev.map((g) => (g.localId === localId ? { ...g, [field]: value } : g))
+    );
+  }
+
+  function updateGroupStartHole(localId: string, startHole: number) {
+    setGroups((prev) =>
+      prev.map((g) => (g.localId === localId ? { ...g, startHole } : g))
     );
   }
 
@@ -450,6 +459,7 @@ export default function SessionEditor({
       id: uuidPattern.test(g.localId) ? g.localId : undefined,
       label: g.label.trim() || undefined,
       teeTime: g.teeTime ? new Date(g.teeTime).toISOString() : undefined,
+      startHole: g.startHole,
       players: g.players,
     }));
   }
@@ -564,17 +574,21 @@ export default function SessionEditor({
               type="button"
               onClick={onDownload}
               disabled={isDownloading}
-              className="rounded-lg border border-zinc-200 bg-white px-4 py-2 text-sm font-medium text-zinc-800 shadow-sm hover:bg-zinc-50 disabled:opacity-50"
+              aria-label="Download JSON"
+              title={isDownloading ? "Downloading" : "Download JSON"}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-zinc-200 bg-white text-zinc-800 shadow-sm hover:bg-zinc-50 disabled:opacity-50"
             >
-              {isDownloading ? "Downloading..." : "Download JSON"}
+              <DownloadIcon />
             </button>
             <button
               type="button"
               onClick={onDelete}
               disabled={isDeleting}
-              className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 shadow-sm hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+              aria-label="Delete"
+              title={isDeleting ? "Deleting" : "Delete"}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-700 shadow-sm hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {isDeleting ? "Deleting..." : "Delete session"}
+              <TrashIcon />
             </button>
           </div>
         </div>
@@ -696,6 +710,21 @@ export default function SessionEditor({
                         onChange={(e) => updateGroup(group.localId, "teeTime", e.target.value)}
                         className={inputClass + " w-full max-w-sm"}
                       />
+                    </div>
+
+                    <div className="mb-3">
+                      <label className="mb-2 block text-sm font-medium text-zinc-700">Start hole</label>
+                      <select
+                        value={group.startHole}
+                        onChange={(e) => updateGroupStartHole(group.localId, Number(e.target.value))}
+                        className={inputClass + " w-full max-w-sm"}
+                      >
+                        {Array.from({ length: 18 }, (_, i) => i + 1).map((hole) => (
+                          <option key={hole} value={hole}>
+                            Hole {hole}
+                          </option>
+                        ))}
+                      </select>
                     </div>
 
                     <div className="mb-3">

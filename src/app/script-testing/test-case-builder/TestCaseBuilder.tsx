@@ -4,7 +4,7 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { loadTestCases, upsertTestCase } from "@/lib/testCases";
-import type { LocationData, TestCase } from "@/lib/testCases";
+import type { LocationData, TestCase, TestCaseCartPath } from "@/lib/testCases";
 import type { LocationPin, ViewTarget } from "./TestCaseBuilderMap";
 
 const TestCaseBuilderMap = dynamic(() => import("./TestCaseBuilderMap"), { ssr: false });
@@ -20,15 +20,24 @@ function makeId() {
   return Math.random().toString(36).slice(2);
 }
 
+function formatDateTimeLocal(d: Date) {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return [
+    d.getFullYear(),
+    pad(d.getMonth() + 1),
+    pad(d.getDate()),
+  ].join("-") + `T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 type CourseOption = { id: string; name: string };
-type MockGroup = { localId: string; label: string; teeTime: string };
+type MockGroup = { localId: string; label: string; teeTime: string; startHole?: number };
 type MockPlayer = { localId: string; name: string; groupId: string | null; usingCarts: boolean };
 type Snapshot = { localId: string; timestamp: string; sourceGroupId: string | null };
 type MockLocation = { localId: string; snapshotId: string; playerId: string; lat: number; lng: number };
 
 type CourseHole = { holeNumber: number; teeLat: number; teeLng: number; greenLat: number; greenLng: number; allottedTime: number };
 type CourseLandmark = { id?: string; landmarkType: string; endpoint1Lat: number; endpoint1Lng: number; endpoint2Lat?: number; endpoint2Lng?: number };
-type CourseCartPath = { holeNumber: number; label: string | null; pathType: string; coordinates: { lat: number; lng: number }[] };
+type CourseCartPath = TestCaseCartPath;
 
 type SavedState = {
   selectedCourseId: string;
@@ -48,13 +57,20 @@ type SavedState = {
 function defaultTimestamp() {
   const now = new Date();
   now.setSeconds(0, 0);
-  return now.toISOString().slice(0, 16);
+  return formatDateTimeLocal(now);
 }
 
 function advanceByMinutes(ts: string, minutes: number) {
   const d = new Date(ts);
   d.setMinutes(d.getMinutes() + minutes);
-  return d.toISOString().slice(0, 16);
+  return formatDateTimeLocal(d);
+}
+
+function sortSnapshotsByTimestamp(items: Snapshot[]) {
+  return items
+    .map((snapshot, index) => ({ snapshot, index }))
+    .sort((a, b) => a.snapshot.timestamp.localeCompare(b.snapshot.timestamp) || a.index - b.index)
+    .map(({ snapshot }) => snapshot);
 }
 
 export default function TestCaseBuilder({ courseOptions }: { courseOptions: CourseOption[] }) {
@@ -93,13 +109,20 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
   // ── LocalStorage ──────────────────────────────────────────────
 
   function applyState(saved: SavedState) {
-    if (saved.groups) setGroups(saved.groups);
+    if (saved.groups) setGroups(saved.groups.map((g) => ({ ...g, startHole: g.startHole ?? 1 })));
     if (saved.players) setPlayers(saved.players);
-    if (saved.snapshots) setSnapshots(saved.snapshots);
+    if (saved.snapshots) {
+      const activeSnapshotId = saved.snapshots[saved.activeSnapshotIdx]?.localId;
+      const sorted = sortSnapshotsByTimestamp(saved.snapshots);
+      setSnapshots(sorted);
+      if (activeSnapshotId) {
+        setActiveSnapshotIdx(Math.max(0, sorted.findIndex((s) => s.localId === activeSnapshotId)));
+      }
+    }
     if (saved.locations) setLocations(saved.locations);
     if (typeof saved.selectedCourseId === "string") setSelectedCourseId(saved.selectedCourseId);
     if (typeof saved.selectedCourseName === "string") setSelectedCourseName(saved.selectedCourseName);
-    if (typeof saved.activeSnapshotIdx === "number") setActiveSnapshotIdx(saved.activeSnapshotIdx);
+    if (typeof saved.activeSnapshotIdx === "number" && !saved.snapshots) setActiveSnapshotIdx(saved.activeSnapshotIdx);
     if (saved.courseHoles) setCourseHoles(saved.courseHoles);
     if (saved.courseLandmarks) setCourseLandmarks(saved.courseLandmarks);
     if (saved.courseCartPaths) setCourseCartPaths(saved.courseCartPaths);
@@ -161,8 +184,8 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
     setSelectedCourseName(data.courseName);
     setCourseHoles(data.holes);
     setCourseLandmarks(data.landmarks);
-    setCourseCartPaths([]);
-    setGroups(data.groups);
+    setCourseCartPaths(data.cartPaths ?? []);
+    setGroups(data.groups.map((g) => ({ ...g, startHole: g.startHole ?? 1 })));
     setPlayers(
       data.players.map((p) => ({
         localId: p.localId,
@@ -186,6 +209,19 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
     setActiveGroupId(null);
     fitMapToLocationData(data);
   }, [fitMapToLocationData]);
+
+  async function loadMissingCartPaths(courseId: string) {
+    try {
+      const data = await fetch(`/api/courses/${courseId}/data`).then((r) => r.json());
+      if (data.cartPaths) {
+        setCourseCartPaths(
+          data.cartPaths as { holeNumber: number; label: string | null; pathType: string; coordinates: { lat: number; lng: number }[] }[]
+        );
+      }
+    } catch {
+      /* ignore */
+    }
+  }
 
   // Auto-load on mount
   useEffect(() => {
@@ -216,6 +252,9 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
     restoringRef.current = true;
     if (tc?.locationData) {
       applyLocationData(tc.locationData);
+      if (!tc.locationData.cartPaths?.length && tc.locationData.courseId) {
+        void loadMissingCartPaths(tc.locationData.courseId);
+      }
     } else {
       resetBuilderState();
     }
@@ -327,7 +366,7 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
   // ── Groups ────────────────────────────────────────────────────
 
   function addGroup() {
-    setGroups((prev) => [...prev, { localId: makeId(), label: `Group ${prev.length + 1}`, teeTime: "" }]);
+    setGroups((prev) => [...prev, { localId: makeId(), label: `Group ${prev.length + 1}`, teeTime: "", startHole: 1 }]);
   }
 
   function updateGroup(id: string, patch: Partial<MockGroup>) {
@@ -346,9 +385,18 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
           });
         }
       } else if (existingSnap) {
-        setSnapshots((prev) => prev.map((s) => s.localId === existingSnap.localId ? { ...s, timestamp: newTeeTime } : s));
+        const activeSnapshotId = snapshots[activeSnapshotIdx]?.localId;
+        setSnapshots((prev) => {
+          const next = sortSnapshotsByTimestamp(
+            prev.map((s) => s.localId === existingSnap.localId ? { ...s, timestamp: newTeeTime } : s)
+          );
+          if (activeSnapshotId) {
+            setActiveSnapshotIdx(Math.max(0, next.findIndex((s) => s.localId === activeSnapshotId)));
+          }
+          return next;
+        });
       } else {
-        setSnapshots((prev) => [...prev, { localId: makeId(), timestamp: newTeeTime, sourceGroupId: id }]);
+        setSnapshots((prev) => sortSnapshotsByTimestamp([...prev, { localId: makeId(), timestamp: newTeeTime, sourceGroupId: id }]));
       }
     }
   }
@@ -406,10 +454,11 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
 
   function addSnapshot() {
     const lastTs = snapshots.length > 0 ? snapshots[snapshots.length - 1].timestamp : defaultTimestamp();
-    const ts = snapshots.length > 0 ? advanceByMinutes(lastTs, 5) : lastTs;
+    const ts = snapshots.length > 0 ? advanceByMinutes(lastTs, 1) : lastTs;
+    const localId = makeId();
     setSnapshots((prev) => {
-      const next = [...prev, { localId: makeId(), timestamp: ts, sourceGroupId: null }];
-      setActiveSnapshotIdx(next.length - 1);
+      const next = sortSnapshotsByTimestamp([...prev, { localId, timestamp: ts, sourceGroupId: null }]);
+      setActiveSnapshotIdx(Math.max(0, next.findIndex((s) => s.localId === localId)));
       return next;
     });
   }
@@ -425,7 +474,14 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
   }
 
   function updateSnapshotTs(idx: number, ts: string) {
-    setSnapshots((prev) => prev.map((s, i) => (i === idx ? { ...s, timestamp: ts } : s)));
+    const snapshotId = snapshots[idx]?.localId;
+    setSnapshots((prev) => {
+      const next = sortSnapshotsByTimestamp(prev.map((s, i) => (i === idx ? { ...s, timestamp: ts } : s)));
+      if (snapshotId) {
+        setActiveSnapshotIdx(Math.max(0, next.findIndex((s) => s.localId === snapshotId)));
+      }
+      return next;
+    });
   }
 
   // ── Map click ─────────────────────────────────────────────────
@@ -445,6 +501,31 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
     );
   }
 
+  function getPreviousPlayerLoc(playerId: string): MockLocation | null {
+    for (let idx = activeSnapshotIdx - 1; idx >= 0; idx -= 1) {
+      const snap = snapshots[idx];
+      const loc = locations.find((l) => l.snapshotId === snap.localId && l.playerId === playerId);
+      if (loc) return loc;
+    }
+    return null;
+  }
+
+  function applyPreviousPlayerLoc(playerId: string) {
+    if (!activeSnapshot) return;
+    const prevLoc = getPreviousPlayerLoc(playerId);
+    if (!prevLoc) return;
+    setLocations((prev) => [
+      ...prev.filter((l) => !(l.snapshotId === activeSnapshot.localId && l.playerId === playerId)),
+      {
+        localId: makeId(),
+        snapshotId: activeSnapshot.localId,
+        playerId,
+        lat: prevLoc.lat,
+        lng: prevLoc.lng,
+      },
+    ]);
+  }
+
   // ── Export ────────────────────────────────────────────────────
 
   function buildLocationData(): LocationData {
@@ -455,10 +536,12 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
       courseName: selectedCourseName || "",
       holes: courseHoles,
       landmarks: courseLandmarks.map((l) => ({ ...l, id: l.id ?? makeId() })),
+      cartPaths: courseCartPaths,
       groups: groups.map((g) => ({
         localId: g.localId,
         label: g.label,
         teeTime: g.teeTime,
+        startHole: g.startHole ?? 1,
       })),
       players: players.map((p) => ({
         localId: p.localId,
@@ -695,6 +778,17 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
                       title="Tee time"
                       className={`${inputCls} w-36 shrink-0`}
                     />
+                    <select
+                      value={g.startHole ?? 1}
+                      onChange={(e) => updateGroup(g.localId, { startHole: Number(e.target.value) })}
+                      onClick={(e) => e.stopPropagation()}
+                      title="Start hole"
+                      className={`${inputCls} w-16 shrink-0`}
+                    >
+                      {Array.from({ length: 18 }, (_, holeIdx) => holeIdx + 1).map((hole) => (
+                        <option key={hole} value={hole}>{hole}</option>
+                      ))}
+                    </select>
                     <button type="button" onClick={(e) => { e.stopPropagation(); removeGroup(g.localId); }} className="shrink-0 text-xs text-zinc-300 hover:text-red-500">✕</button>
                   </div>
                 );
@@ -825,6 +919,7 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
                   {filteredPlayers.map((player) => {
                     const blocked = isBlockedAtSnapshot(activeSnapshot, player);
                     const loc = blocked ? null : snapshotLocs.find((l) => l.playerId === player.localId);
+                    const prevLoc = blocked || loc ? null : getPreviousPlayerLoc(player.localId);
                     const isActive = player.localId === activePlayerId;
                     return (
                       <div
@@ -859,7 +954,18 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
                             </button>
                           </>
                         ) : (
-                          <span className="shrink-0 text-xs text-zinc-300">—</span>
+                          prevLoc ? (
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); applyPreviousPlayerLoc(player.localId); }}
+                              className="shrink-0 rounded border border-zinc-200 bg-white px-1.5 py-0.5 text-xs font-medium text-zinc-500 hover:bg-zinc-50 hover:text-zinc-800"
+                              title={`Use ${prevLoc.lat.toFixed(4)}, ${prevLoc.lng.toFixed(4)}`}
+                            >
+                              Use previous
+                            </button>
+                          ) : (
+                            <span className="shrink-0 text-xs text-zinc-300">—</span>
+                          )
                         )}
                       </div>
                     );

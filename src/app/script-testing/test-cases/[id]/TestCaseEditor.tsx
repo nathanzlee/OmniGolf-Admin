@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import AdminNav from "@/components/AdminNav";
 import ScriptTestingSubnav from "../../ScriptTestingSubnav";
+import { DownloadIcon, TrashIcon } from "@/components/ActionIcons";
 import {
   TestCase,
   TestCaseGroup,
@@ -20,6 +21,7 @@ import {
   upsertTestCase,
   removeTestCase,
   buildLandmarkOptions,
+  testCaseToExportJsonWithCourseData,
 } from "@/lib/testCases";
 
 // Local UI types that allow empty eventType for newly-added unsaved rows
@@ -159,8 +161,8 @@ export default function TestCaseEditor({
         if (g) {
           gs = gs.filter((x) => x.localId !== ev.groupId);
           gs.push(
-            { localId: `${ev.groupId}-a`, label: `${g.label}a`, teeTime: g.teeTime },
-            { localId: `${ev.groupId}-b`, label: `${g.label}b`, teeTime: g.teeTime }
+            { localId: `${ev.groupId}-a`, label: `${g.label}a`, teeTime: g.teeTime, startHole: g.startHole },
+            { localId: `${ev.groupId}-b`, label: `${g.label}b`, teeTime: g.teeTime, startHole: g.startHole }
           );
         }
       } else if (ev.eventType === "group join") {
@@ -277,6 +279,19 @@ export default function TestCaseEditor({
     }
   }
 
+  async function downloadSessionJson() {
+    const tc = buildTestCase();
+    const json = JSON.stringify(await testCaseToExportJsonWithCourseData(tc), null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const safeName = (tc.name || "test-case").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    a.href = url;
+    a.download = `${safeName || "test-case"}-session.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   function onDelete() {
     if (!confirm(`Delete "${name}"? This cannot be undone.`)) return;
     setIsDeleting(true);
@@ -316,11 +331,22 @@ export default function TestCaseEditor({
             </Link>
             <button
               type="button"
+              onClick={downloadSessionJson}
+              aria-label="Download JSON"
+              title="Download JSON"
+              className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-zinc-200 bg-white text-zinc-800 shadow-sm hover:bg-zinc-50"
+            >
+              <DownloadIcon />
+            </button>
+            <button
+              type="button"
               onClick={onDelete}
               disabled={isDeleting}
-              className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 shadow-sm hover:bg-red-100 disabled:opacity-50"
+              aria-label="Delete"
+              title={isDeleting ? "Deleting" : "Delete"}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-700 shadow-sm hover:bg-red-100 disabled:opacity-50"
             >
-              {isDeleting ? "Deleting…" : "Delete"}
+              <TrashIcon />
             </button>
           </div>
         </div>
@@ -398,6 +424,10 @@ export default function TestCaseEditor({
                   <span className="text-xs text-zinc-600">
                     <span className="font-medium text-zinc-500">Locations: </span>
                     {locationData.players.reduce((sum, p) => sum + p.locations.length, 0)}
+                  </span>
+                  <span className="text-xs text-zinc-600">
+                    <span className="font-medium text-zinc-500">Cart Paths: </span>
+                    {locationData.cartPaths?.length ?? 0}
                   </span>
                 </div>
                 {locationData.players.length > 0 && (

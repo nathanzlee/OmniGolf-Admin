@@ -7,6 +7,7 @@ export type TestCaseGroup = {
   localId: string;
   label: string;
   teeTime: string;
+  startHole?: number;
 };
 
 export type TestCasePacingRow = {
@@ -44,6 +45,13 @@ export type TestCaseLandmark = {
   endpoint2Lng?: number;
 };
 
+export type TestCaseCartPath = {
+  holeNumber: number;
+  label: string | null;
+  pathType: string;
+  coordinates: { lat: number; lng: number }[];
+};
+
 export type LocationDataPlayer = {
   localId: string;
   name: string;
@@ -57,6 +65,7 @@ export type LocationData = {
   courseName: string;
   holes: TestCaseHole[];
   landmarks: TestCaseLandmark[];
+  cartPaths?: TestCaseCartPath[];
   groups: TestCaseGroup[];
   players: LocationDataPlayer[];
 };
@@ -178,6 +187,12 @@ export function testCaseToExportJson(tc: TestCase): object {
 
   if (tc.locationData) {
     const locationData = tc.locationData;
+    const cartPathsByHole = new Map<number, TestCaseCartPath[]>();
+    for (const cp of locationData.cartPaths ?? []) {
+      if (!cartPathsByHole.has(cp.holeNumber)) cartPathsByHole.set(cp.holeNumber, []);
+      cartPathsByHole.get(cp.holeNumber)!.push(cp);
+    }
+
     base = {
       version: 1,
       exported_at: new Date().toISOString(),
@@ -192,6 +207,11 @@ export function testCaseToExportJson(tc: TestCase): object {
         green_lat: h.greenLat,
         green_lng: h.greenLng,
         allotted_time: h.allottedTime,
+        cart_paths: (cartPathsByHole.get(h.holeNumber) ?? []).map((cp) => ({
+          label: cp.label ?? null,
+          path_type: cp.pathType,
+          coordinates: cp.coordinates,
+        })),
       })),
       course_landmarks: locationData.landmarks.map((l) => ({
         id: l.id,
@@ -211,6 +231,7 @@ export function testCaseToExportJson(tc: TestCase): object {
         group_id: g.localId,
         label: g.label,
         tee_time: g.teeTime ? new Date(g.teeTime).toISOString() : null,
+        start_hole: g.startHole ?? 1,
         players: locationData.players
           .filter((p) => p.groupId === g.localId)
           .map((p) => ({ user_id: p.localId, using_carts: p.usingCarts ?? false })),
@@ -267,4 +288,27 @@ export function testCaseToExportJson(tc: TestCase): object {
       time: ev.time || null,
     })),
   };
+}
+
+export async function testCaseToExportJsonWithCourseData(tc: TestCase): Promise<object> {
+  if (!tc.locationData?.courseId || (tc.locationData.cartPaths?.length ?? 0) > 0) {
+    return testCaseToExportJson(tc);
+  }
+
+  try {
+    const res = await fetch(`/api/courses/${tc.locationData.courseId}/data`);
+    if (!res.ok) return testCaseToExportJson(tc);
+    const data = await res.json() as { cartPaths?: TestCaseCartPath[] };
+    if (!data.cartPaths?.length) return testCaseToExportJson(tc);
+
+    return testCaseToExportJson({
+      ...tc,
+      locationData: {
+        ...tc.locationData,
+        cartPaths: data.cartPaths,
+      },
+    });
+  } catch {
+    return testCaseToExportJson(tc);
+  }
 }

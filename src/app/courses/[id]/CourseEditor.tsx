@@ -10,6 +10,7 @@ import {
 } from "../../actions";
 import { useRouter } from "next/navigation";
 import AdminNav from "@/components/AdminNav";
+import { TrashIcon } from "@/components/ActionIcons";
 import CourseSubnav from "../CourseSubnav";
 
 type Course = { id: string; name: string; created_at: string };
@@ -422,9 +423,11 @@ export default function CourseEditor({
               type="button"
               onClick={onDelete}
               disabled={isDeleting}
-              className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 shadow-sm hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+              aria-label="Delete"
+              title={isDeleting ? "Deleting" : "Delete"}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-700 shadow-sm hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {isDeleting ? "Deleting..." : "Delete course"}
+              <TrashIcon />
             </button>
           </div>
         </div>

@@ -2,9 +2,18 @@ import Link from "next/link";
 import { listSessions } from "../actions";
 import AdminNav from "@/components/AdminNav";
 import SessionSubnav from "./SessionSubnav";
+import { DownloadIcon, EditIcon } from "@/components/ActionIcons";
+
+type SessionListRow = {
+  id: string;
+  name: string;
+  session_date: string | null;
+  status: string;
+  golf_courses?: { name?: string | null } | { name?: string | null }[] | null;
+};
 
 export default async function SessionsPage() {
-  const sessions = await listSessions();
+  const sessions = await listSessions() as SessionListRow[];
 
   return (
     <main className="min-h-screen bg-zinc-50">
@@ -48,11 +57,11 @@ export default async function SessionsPage() {
                 {sessions.length === 0 ? (
                   <tr>
                     <td className="px-4 py-6 text-sm text-zinc-600" colSpan={5}>
-                      No sessions yet. Click "Add new session".
+                      No sessions yet. Click &ldquo;Add new session&rdquo;.
                     </td>
                   </tr>
                 ) : (
-                  sessions.map((s: any) => (
+                  sessions.map((s) => (
                     <tr key={s.id} className="hover:bg-zinc-50">
                       <td className="border-b border-zinc-100 px-4 py-3 text-sm text-zinc-900">{s.name}</td>
                       <td className="border-b border-zinc-100 px-4 py-3 text-sm text-zinc-600">
@@ -61,9 +70,24 @@ export default async function SessionsPage() {
                       <td className="border-b border-zinc-100 px-4 py-3 text-sm text-zinc-600">{s.session_date || "—"}</td>
                       <td className="border-b border-zinc-100 px-4 py-3 text-sm text-zinc-600">{s.status}</td>
                       <td className="border-b border-zinc-100 px-4 py-3">
-                        <div className="flex justify-end gap-3">
-                          <Link href={`/sessions/${s.id}`} className="text-sm font-medium text-zinc-900 underline decoration-zinc-300 hover:decoration-zinc-600">Edit</Link>
-                          <Link href={`/sessions/${s.id}`} className="text-sm font-medium text-zinc-900 underline decoration-zinc-300 hover:decoration-zinc-600">Download JSON</Link>
+                        <div className="flex justify-end gap-2">
+                          <Link
+                            href={`/sessions/${s.id}`}
+                            aria-label="Edit"
+                            title="Edit"
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-200 bg-white text-zinc-700 shadow-sm hover:bg-zinc-50"
+                          >
+                            <EditIcon />
+                          </Link>
+                          <Link
+                            href={`/api/sessions/${s.id}/export`}
+                            aria-label="Download JSON"
+                            title="Download JSON"
+                            download={`${s.name || "session"}.json`}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-200 bg-white text-zinc-700 shadow-sm hover:bg-zinc-50"
+                          >
+                            <DownloadIcon />
+                          </Link>
                         </div>
                       </td>
                     </tr>
@@ -73,7 +97,7 @@ export default async function SessionsPage() {
             </table>
           </div>
           <div className="px-4 py-3 text-xs text-zinc-500">
-            Use "Download JSON" to export the full session payload for predictions or analysis.
+            Use the download action to export the full session payload for predictions or analysis.
           </div>
         </div>
       </div>

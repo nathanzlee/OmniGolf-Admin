@@ -1,22 +1,19 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import AdminNav from "@/components/AdminNav";
 import ScriptTestingSubnav from "../ScriptTestingSubnav";
-import { TestCase, loadTestCases, saveTestCases } from "@/lib/testCases";
+import { TestCase, loadTestCases, saveTestCases, testCaseToExportJsonWithCourseData } from "@/lib/testCases";
+import { DownloadIcon, EditIcon, TrashIcon } from "@/components/ActionIcons";
 
 const thClass =
   "border-b border-zinc-200 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-zinc-600";
 
 export default function TestCasesPage() {
-  const [testCases, setTestCases] = useState<TestCase[]>([]);
+  const [testCases, setTestCases] = useState<TestCase[]>(() => loadTestCases());
   const router = useRouter();
-
-  useEffect(() => {
-    setTestCases(loadTestCases());
-  }, []);
 
   function handleNew() {
     router.push(`/script-testing/test-cases/${crypto.randomUUID()}`);
@@ -27,6 +24,18 @@ export default function TestCasesPage() {
     const updated = testCases.filter((tc) => tc.id !== id);
     saveTestCases(updated);
     setTestCases(updated);
+  }
+
+  async function downloadTestCaseJson(tc: TestCase) {
+    const json = JSON.stringify(await testCaseToExportJsonWithCourseData(tc), null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const safeName = (tc.name || "test-case").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    a.href = url;
+    a.download = `${safeName || "test-case"}-session.json`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   return (
@@ -84,19 +93,32 @@ export default function TestCasesPage() {
                         {tc.groups.length}
                       </td>
                       <td className="border-b border-zinc-100 px-4 py-3">
-                        <div className="flex justify-end gap-3">
+                        <div className="flex justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => downloadTestCaseJson(tc)}
+                            aria-label="Download JSON"
+                            title="Download JSON"
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-200 bg-white text-zinc-700 shadow-sm hover:bg-zinc-50"
+                          >
+                            <DownloadIcon />
+                          </button>
                           <Link
                             href={`/script-testing/test-cases/${tc.id}`}
-                            className="text-sm font-medium text-zinc-900 underline decoration-zinc-300 hover:decoration-zinc-600"
+                            aria-label="Edit"
+                            title="Edit"
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-200 bg-white text-zinc-700 shadow-sm hover:bg-zinc-50"
                           >
-                            Edit
+                            <EditIcon />
                           </Link>
                           <button
                             type="button"
                             onClick={() => handleDelete(tc.id)}
-                            className="text-sm font-medium text-red-600 underline decoration-red-300 hover:decoration-red-600"
+                            aria-label="Delete"
+                            title="Delete"
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-700 shadow-sm hover:bg-red-100"
                           >
-                            Delete
+                            <TrashIcon />
                           </button>
                         </div>
                       </td>

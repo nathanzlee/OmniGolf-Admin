@@ -400,6 +400,7 @@ export type SessionGroupInput = {
   id?: string;
   label?: string;
   teeTime?: string;
+  startHole?: number;
   players: { userId: string; usingCarts: boolean }[];
 };
 
@@ -407,6 +408,7 @@ export type SessionGroupRecord = {
   id: string;
   label: string | null;
   tee_time: string | null;
+  start_hole: number | null;
 };
 
 export type SessionGroupPlayerRecord = {
@@ -477,6 +479,10 @@ export async function createSession(params: {
 
   const seenUsers = new Set<string>();
   for (const group of groups) {
+    if (group.startHole != null && (!Number.isInteger(group.startHole) || group.startHole < 1 || group.startHole > 18)) {
+      throw new Error("Start hole must be between 1 and 18.");
+    }
+
     for (const { userId } of group.players) {
       assertUuid(userId, "createSession.group.playerUserId");
       if (seenUsers.has(userId)) {
@@ -508,6 +514,7 @@ export async function createSession(params: {
         session_id: session.id,
         label: group.label?.trim() || null,
         tee_time: group.teeTime || null,
+        start_hole: group.startHole ?? 1,
       })
       .select("id")
       .single();
@@ -560,7 +567,7 @@ export async function getSessionGroups(
 
   const { data, error } = await supabase
     .from("session_groups")
-    .select("id, label, tee_time")
+    .select("id, label, tee_time, start_hole")
     .eq("session_id", sessionId)
     .order("created_at", { ascending: true });
 
@@ -615,6 +622,9 @@ export async function updateSession(params: {
 
   for (const group of groups) {
     if (group.id) assertUuid(group.id, "updateSession.group.id");
+    if (group.startHole != null && (!Number.isInteger(group.startHole) || group.startHole < 1 || group.startHole > 18)) {
+      throw new Error("Start hole must be between 1 and 18.");
+    }
 
     for (const { userId } of group.players) {
       assertUuid(userId, "updateSession.group.playerUserId");
@@ -685,6 +695,7 @@ export async function updateSession(params: {
         .update({
           label: group.label?.trim() || null,
           tee_time: group.teeTime || null,
+          start_hole: group.startHole ?? 1,
         })
         .eq("id", group.id);
 
@@ -700,6 +711,7 @@ export async function updateSession(params: {
           session_id: sessionId,
           label: group.label?.trim() || null,
           tee_time: group.teeTime || null,
+          start_hole: group.startHole ?? 1,
         })
         .select("id")
         .single();
