@@ -296,6 +296,21 @@ export default function TestCaseEditor({
     }
   }
 
+  async function goToTestCaseBuilder() {
+    setMessage("");
+    setIsSaving(true);
+    try {
+      const tc = buildTestCase();
+      await upsertTestCaseRecord(tc);
+      setExistingTestCase(tc);
+      router.push(`/script-testing/test-case-builder?tcId=${id}`);
+    } catch (e: unknown) {
+      setMessage(e instanceof Error ? e.message : "Failed to save before opening the builder.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
   async function downloadSessionJson() {
     const tc = buildTestCase();
     const json = JSON.stringify(await testCaseToExportJsonWithCourseData(tc), null, 2);
@@ -474,12 +489,14 @@ export default function TestCaseEditor({
                   </div>
                 )}
                 <div className="flex gap-2">
-                  <a
-                    href={`/script-testing/test-case-builder?tcId=${id}`}
-                    className="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-sm hover:bg-zinc-50"
+                  <button
+                    type="button"
+                    onClick={() => void goToTestCaseBuilder()}
+                    disabled={isSaving}
+                    className="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-sm hover:bg-zinc-50 disabled:opacity-50"
                   >
                     Edit in Test Case Builder
-                  </a>
+                  </button>
                   <button
                     type="button"
                     onClick={async () => {
@@ -515,12 +532,14 @@ export default function TestCaseEditor({
                 <p className="text-sm text-zinc-500">
                   No location data set. Use the Test Case Builder to add players and locations.
                 </p>
-                <a
-                  href={`/script-testing/test-case-builder?tcId=${id}`}
-                  className="ml-4 shrink-0 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-sm hover:bg-zinc-50"
+                <button
+                  type="button"
+                  onClick={() => void goToTestCaseBuilder()}
+                  disabled={isSaving}
+                  className="ml-4 shrink-0 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-sm hover:bg-zinc-50 disabled:opacity-50"
                 >
                   Go to Test Case Builder
-                </a>
+                </button>
               </div>
             )}
           </div>

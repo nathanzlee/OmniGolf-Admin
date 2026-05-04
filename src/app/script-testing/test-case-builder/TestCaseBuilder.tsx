@@ -58,6 +58,20 @@ type SavedState = {
   mapZoom?: number;
 };
 
+function hasSavedBuilderContent(saved: SavedState) {
+  return Boolean(
+    saved.selectedCourseId ||
+      saved.selectedCourseName ||
+      saved.groups?.length ||
+      saved.players?.length ||
+      saved.snapshots?.length ||
+      saved.locations?.length ||
+      saved.courseHoles?.length ||
+      saved.courseLandmarks?.length ||
+      saved.courseCartPaths?.length
+  );
+}
+
 function defaultTimestamp() {
   const now = new Date();
   now.setSeconds(0, 0);
@@ -292,13 +306,18 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
     let restoredFromLocalStorage = false;
     if (raw) {
       try {
+        const saved = JSON.parse(raw) as SavedState;
         restoringRef.current = true;
-        applyState(JSON.parse(raw) as SavedState);
-        restoredFromLocalStorage = true;
-        setExportMode("existing");
-        setTargetTestCaseId(editTestCaseId);
-        setExportName("");
-        setTimeout(() => { restoringRef.current = false; setMapReady(true); }, 0);
+        if (hasSavedBuilderContent(saved)) {
+          applyState(saved);
+          restoredFromLocalStorage = true;
+          setExportMode("existing");
+          setTargetTestCaseId(editTestCaseId);
+          setExportName("");
+          setTimeout(() => { restoringRef.current = false; setMapReady(true); }, 0);
+        } else {
+          window.localStorage.removeItem(storageKey);
+        }
       } catch {
         window.localStorage.removeItem(storageKey);
       }
@@ -314,7 +333,7 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
           if (!tc.locationData.cartPaths?.length && tc.locationData.courseId) {
             void loadMissingCartPaths(tc.locationData.courseId);
           }
-        } else {
+        } else if (!restoredFromLocalStorage) {
           resetBuilderState();
         }
         setExportMode("existing");
