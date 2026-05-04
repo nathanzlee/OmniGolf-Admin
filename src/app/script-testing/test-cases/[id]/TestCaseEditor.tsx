@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import AdminNav from "@/components/AdminNav";
 import ScriptTestingSubnav from "../../ScriptTestingSubnav";
+import { deleteTestCaseRecord, getTestCase, upsertTestCaseRecord } from "@/app/actions";
 import { DownloadIcon, TrashIcon } from "@/components/ActionIcons";
 import {
   TestCase,
@@ -17,9 +18,6 @@ import {
   LandmarkOption,
   PacingEventType,
   TestCaseEventType,
-  loadTestCases,
-  upsertTestCase,
-  removeTestCase,
   buildLandmarkOptions,
   testCaseToExportJsonWithCourseData,
 } from "@/lib/testCases";
@@ -89,6 +87,7 @@ export default function TestCaseEditor({
   const [isDeleting, setIsDeleting] = useState(false);
   const [message, setMessage] = useState("");
   const [loaded, setLoaded] = useState(false);
+  const [existingTestCase, setExistingTestCase] = useState<TestCase | null>(null);
   const [sectionsOpen, setSectionsOpen] = useState({
     config: true,
     locationData: true,
@@ -96,23 +95,38 @@ export default function TestCaseEditor({
     events: true,
   });
 
-  // Load from localStorage on mount
+  // Load from the shared test_cases table on mount
   useEffect(() => {
-    const tc = loadTestCases().find((t) => t.id === id);
-    if (tc) {
-      setName(tc.name);
-      setDescription(tc.description ?? "");
-      setCourseId(tc.courseId ?? null);
-      setCourseName(tc.courseName ?? null);
-      setSessionJson(tc.sessionJson ?? "");
-      setLocationData(tc.locationData ?? null);
-      setGroups(tc.groups);
-      setHoles(tc.holes);
-      setLandmarks(tc.landmarks);
-      setPacingRows(tc.pacingRows);
-      setEvents(tc.events);
-    }
-    setLoaded(true);
+    let cancelled = false;
+    setLoaded(false);
+    getTestCase(id)
+      .then((tc) => {
+        if (cancelled) return;
+        setExistingTestCase(tc);
+        if (tc) {
+          setName(tc.name);
+          setDescription(tc.description ?? "");
+          setCourseId(tc.courseId ?? null);
+          setCourseName(tc.courseName ?? null);
+          setSessionJson(tc.sessionJson ?? "");
+          setLocationData(tc.locationData ?? null);
+          setGroups(tc.groups);
+          setHoles(tc.holes);
+          setLandmarks(tc.landmarks);
+          setPacingRows(tc.pacingRows);
+          setEvents(tc.events);
+        }
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setMessage(e instanceof Error ? e.message : "Failed to load test case.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoaded(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [id]);
 
   // Landmark options derived from stored holes/landmarks
@@ -247,7 +261,6 @@ export default function TestCaseEditor({
   // ── Save / Delete ───────────────────────────────────────────────────────────
 
   function buildTestCase(): TestCase {
-    const existing = loadTestCases().find((t) => t.id === id);
     return {
       id,
       name: name.trim() || "Untitled Test Case",
@@ -260,20 +273,22 @@ export default function TestCaseEditor({
       pacingRows: pacingRows.filter((r) => r.eventType !== "").map((r) => r as TestCasePacingRow),
       events: events.filter((e) => e.eventType !== "").map((e) => e as TestCaseEventRow),
       sessionJson,
-      locationData: existing?.locationData ?? locationData ?? null,
-      createdAt: existing?.createdAt ?? new Date().toISOString(),
+      locationData: existingTestCase?.locationData ?? locationData ?? null,
+      createdAt: existingTestCase?.createdAt ?? new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
   }
 
-  function onSave() {
+  async function onSave() {
     setMessage("");
     setIsSaving(true);
     try {
-      upsertTestCase(buildTestCase());
-      setMessage("✅ Saved.");
+      const tc = buildTestCase();
+      await upsertTestCaseRecord(tc);
+      setExistingTestCase(tc);
+      setMessage("Saved.");
     } catch (e: unknown) {
-      setMessage(`❌ ${e instanceof Error ? e.message : "Failed to save."}`);
+      setMessage(e instanceof Error ? e.message : "Failed to save.");
     } finally {
       setIsSaving(false);
     }
@@ -292,13 +307,14 @@ export default function TestCaseEditor({
     URL.revokeObjectURL(url);
   }
 
-  function onDelete() {
+  async function onDelete() {
     if (!confirm(`Delete "${name}"? This cannot be undone.`)) return;
     setIsDeleting(true);
     try {
-      removeTestCase(id);
+      await deleteTestCaseRecord(id);
       router.push("/script-testing/test-cases");
-    } catch {
+    } catch (e: unknown) {
+      setMessage(e instanceof Error ? e.message : "Failed to delete test case.");
       setIsDeleting(false);
     }
   }
@@ -464,11 +480,27 @@ export default function TestCaseEditor({
                   </a>
                   <button
                     type="button"
-                    onClick={() => {
+                    onClick={async () => {
                       if (!confirm("Clear location data?")) return;
                       setLocationData(null);
-                      const existing = loadTestCases().find((t) => t.id === id);
-                      if (existing) upsertTestCase({ ...existing, locationData: null, updatedAt: new Date().toISOString() });
+                      if (!existingTestCase) return;
+                      const updated = {
+                        ...existingTestCase,
+                        locationData: null,
+                        courseId: null,
+                        courseName: null,
+                        holes: [],
+                        landmarks: [],
+                        groups: [],
+                        updatedAt: new Date().toISOString(),
+                      };
+                      await upsertTestCaseRecord(updated);
+                      setExistingTestCase(updated);
+                      setCourseId(null);
+                      setCourseName(null);
+                      setGroups([]);
+                      setHoles([]);
+                      setLandmarks([]);
                     }}
                     className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100"
                   >

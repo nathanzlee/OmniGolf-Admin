@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { TestCase, loadTestCases, testCaseToExportJson } from "@/lib/testCases";
+import { listTestCases } from "@/app/actions";
+import { TestCase, testCaseToExportJson } from "@/lib/testCases";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -947,7 +948,9 @@ export default function ScriptTester({
     const ab = localStorage.getItem(LS_KEYS.assignmentB64);
     if (an && ab) setAssignment({ name: an, b64: ab });
 
-    setTestCases(loadTestCases());
+    void listTestCases()
+      .then(setTestCases)
+      .catch((e: unknown) => console.error(e));
   }, []);
 
   // ── Script upload helpers ─────────────────────────────────────────────────

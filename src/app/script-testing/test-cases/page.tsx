@@ -1,29 +1,54 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import AdminNav from "@/components/AdminNav";
 import ScriptTestingSubnav from "../ScriptTestingSubnav";
-import { TestCase, loadTestCases, saveTestCases, testCaseToExportJsonWithCourseData } from "@/lib/testCases";
+import { deleteTestCaseRecord, listTestCases } from "@/app/actions";
+import { TestCase, testCaseToExportJsonWithCourseData } from "@/lib/testCases";
 import { DownloadIcon, EditIcon, TrashIcon } from "@/components/ActionIcons";
 
 const thClass =
   "border-b border-zinc-200 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-zinc-600";
 
 export default function TestCasesPage() {
-  const [testCases, setTestCases] = useState<TestCase[]>(() => loadTestCases());
+  const [testCases, setTestCases] = useState<TestCase[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [message, setMessage] = useState("");
   const router = useRouter();
+
+  useEffect(() => {
+    let cancelled = false;
+    listTestCases()
+      .then((cases) => {
+        if (!cancelled) setTestCases(cases);
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setMessage(e instanceof Error ? e.message : "Failed to load test cases.");
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   function handleNew() {
     router.push(`/script-testing/test-cases/${crypto.randomUUID()}`);
   }
 
-  function handleDelete(id: string) {
+  async function handleDelete(id: string) {
     if (!confirm("Delete this test case? This cannot be undone.")) return;
-    const updated = testCases.filter((tc) => tc.id !== id);
-    saveTestCases(updated);
-    setTestCases(updated);
+    setMessage("");
+    try {
+      await deleteTestCaseRecord(id);
+      setTestCases((prev) => prev.filter((tc) => tc.id !== id));
+    } catch (e: unknown) {
+      setMessage(e instanceof Error ? e.message : "Failed to delete test case.");
+    }
   }
 
   async function downloadTestCaseJson(tc: TestCase) {
@@ -63,6 +88,11 @@ export default function TestCasesPage() {
         </div>
 
         <div className="rounded-xl border border-zinc-200 bg-white shadow-sm">
+          {message && (
+            <div className="border-b border-zinc-100 px-4 py-3 text-sm text-red-600">
+              {message}
+            </div>
+          )}
           <div className="overflow-x-auto rounded-xl">
             <table className="w-full min-w-[500px] border-collapse">
               <thead>
@@ -74,7 +104,13 @@ export default function TestCasesPage() {
                 </tr>
               </thead>
               <tbody>
-                {testCases.length === 0 ? (
+                {isLoading ? (
+                  <tr>
+                    <td className="px-4 py-6 text-sm text-zinc-600" colSpan={4}>
+                      Loading test cases...
+                    </td>
+                  </tr>
+                ) : testCases.length === 0 ? (
                   <tr>
                     <td className="px-4 py-6 text-sm text-zinc-600" colSpan={4}>
                       No test cases yet. Click &ldquo;Add new test case&rdquo;.

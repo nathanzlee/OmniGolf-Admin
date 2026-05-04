@@ -3,7 +3,7 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { loadTestCases, upsertTestCase } from "@/lib/testCases";
+import { getTestCase, listTestCases, upsertTestCaseRecord } from "@/app/actions";
 import type { LocationData, TestCase, TestCaseCartPath } from "@/lib/testCases";
 import type { LocationPin, ViewTarget } from "./TestCaseBuilderMap";
 
@@ -96,6 +96,7 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
   const [exportName, setExportName] = useState("");
   const [targetTestCaseId, setTargetTestCaseId] = useState("");
   const [exportMessage, setExportMessage] = useState("");
+  const [currentTestCase, setCurrentTestCase] = useState<TestCase | null>(null);
 
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -244,24 +245,53 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
   }, [applyLocationData, editTestCaseId]);
 
   useEffect(() => {
-    const cases = loadTestCases();
-    setTestCases(cases);
-    if (!editTestCaseId) return;
+    let cancelled = false;
 
-    const tc = cases.find((t) => t.id === editTestCaseId);
-    restoringRef.current = true;
-    if (tc?.locationData) {
-      applyLocationData(tc.locationData);
-      if (!tc.locationData.cartPaths?.length && tc.locationData.courseId) {
-        void loadMissingCartPaths(tc.locationData.courseId);
-      }
-    } else {
-      resetBuilderState();
+    listTestCases()
+      .then((cases) => {
+        if (!cancelled) setTestCases(cases);
+      })
+      .catch(() => {
+        if (!cancelled) setTestCases([]);
+      });
+
+    if (!editTestCaseId) {
+      setCurrentTestCase(null);
+      return () => {
+        cancelled = true;
+      };
     }
-    setExportMode("existing");
-    setTargetTestCaseId(editTestCaseId);
-    setExportName(tc?.name ?? "");
-    setTimeout(() => { restoringRef.current = false; }, 0);
+
+    restoringRef.current = true;
+    getTestCase(editTestCaseId)
+      .then((tc) => {
+        if (cancelled) return;
+        setCurrentTestCase(tc);
+        if (tc?.locationData) {
+          applyLocationData(tc.locationData);
+          if (!tc.locationData.cartPaths?.length && tc.locationData.courseId) {
+            void loadMissingCartPaths(tc.locationData.courseId);
+          }
+        } else {
+          resetBuilderState();
+        }
+        setExportMode("existing");
+        setTargetTestCaseId(editTestCaseId);
+        setExportName(tc?.name ?? "");
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCurrentTestCase(null);
+          resetBuilderState();
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setTimeout(() => { restoringRef.current = false; }, 0);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [applyLocationData, editTestCaseId, resetBuilderState]);
 
   // Auto-save on state changes
@@ -557,10 +587,15 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
     };
   }
 
-  function openExportDialog() {
-    const cases = loadTestCases();
-    setTestCases(cases);
+  async function openExportDialog() {
     setExportMessage("");
+    let cases: TestCase[] = [];
+    try {
+      cases = await listTestCases();
+      setTestCases(cases);
+    } catch (e: unknown) {
+      setExportMessage(e instanceof Error ? e.message : "Failed to load test cases.");
+    }
     setExportName(selectedCourseName ? `${selectedCourseName} Mock` : "Mock Location Data");
     if (editTestCaseId && cases.some((tc) => tc.id === editTestCaseId)) {
       setExportMode("existing");
@@ -574,59 +609,19 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
     setExportOpen(true);
   }
 
-  function exportToTestCase() {
-    const locationData = buildLocationData();
-    const now = new Date().toISOString();
-    const existingCases = loadTestCases();
+  async function exportToTestCase() {
+    setExportMessage("");
+    try {
+      const locationData = buildLocationData();
+      const now = new Date().toISOString();
 
-    if (exportMode === "existing") {
-      const existing = existingCases.find((tc) => tc.id === targetTestCaseId);
-      if (!existing) {
-        setExportMessage("Choose a test case to update.");
-        return;
-      }
-      upsertTestCase({
-        ...existing,
-        courseId: locationData.courseId || null,
-        courseName: locationData.courseName || null,
-        holes: locationData.holes,
-        landmarks: locationData.landmarks,
-        groups: locationData.groups,
-        locationData,
-        updatedAt: now,
-      });
-      router.push(`/script-testing/test-cases/${existing.id}`);
-      return;
-    }
-
-    const id = crypto.randomUUID();
-    const tc: TestCase = {
-      id,
-      name: exportName.trim() || (selectedCourseName ? `${selectedCourseName} Mock` : "Mock Location Data"),
-      description: "",
-      courseId: locationData.courseId || null,
-      courseName: locationData.courseName || null,
-      holes: locationData.holes,
-      landmarks: locationData.landmarks,
-      groups: locationData.groups,
-      pacingRows: [],
-      events: [],
-      sessionJson: "",
-      locationData,
-      createdAt: now,
-      updatedAt: now,
-    };
-    upsertTestCase(tc);
-    router.push(`/script-testing/test-cases/${id}`);
-  }
-
-  function saveToCurrentTestCase() {
-    if (!editTestCaseId) return;
-    const locationData = buildLocationData();
-    const existing = loadTestCases().find((tc) => tc.id === editTestCaseId);
-    const now = new Date().toISOString();
-    const tc: TestCase = existing
-      ? {
+      if (exportMode === "existing") {
+        const existing = await getTestCase(targetTestCaseId);
+        if (!existing) {
+          setExportMessage("Choose a test case to update.");
+          return;
+        }
+        await upsertTestCaseRecord({
           ...existing,
           courseId: locationData.courseId || null,
           courseName: locationData.courseName || null,
@@ -635,25 +630,73 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
           groups: locationData.groups,
           locationData,
           updatedAt: now,
-        }
-      : {
-          id: editTestCaseId,
-          name: selectedCourseName ? `${selectedCourseName} Mock` : "Untitled Test Case",
-          description: "",
-          courseId: locationData.courseId || null,
-          courseName: locationData.courseName || null,
-          holes: locationData.holes,
-          landmarks: locationData.landmarks,
-          groups: locationData.groups,
-          pacingRows: [],
-          events: [],
-          sessionJson: "",
-          locationData,
-          createdAt: now,
-          updatedAt: now,
-        };
-    upsertTestCase(tc);
-    router.push(`/script-testing/test-cases/${editTestCaseId}`);
+        });
+        router.push(`/script-testing/test-cases/${existing.id}`);
+        return;
+      }
+
+      const id = crypto.randomUUID();
+      const tc: TestCase = {
+        id,
+        name: exportName.trim() || (selectedCourseName ? `${selectedCourseName} Mock` : "Mock Location Data"),
+        description: "",
+        courseId: locationData.courseId || null,
+        courseName: locationData.courseName || null,
+        holes: locationData.holes,
+        landmarks: locationData.landmarks,
+        groups: locationData.groups,
+        pacingRows: [],
+        events: [],
+        sessionJson: "",
+        locationData,
+        createdAt: now,
+        updatedAt: now,
+      };
+      await upsertTestCaseRecord(tc);
+      router.push(`/script-testing/test-cases/${id}`);
+    } catch (e: unknown) {
+      setExportMessage(e instanceof Error ? e.message : "Failed to export.");
+    }
+  }
+
+  async function saveToCurrentTestCase() {
+    if (!editTestCaseId) return;
+    try {
+      const locationData = buildLocationData();
+      const existing = currentTestCase ?? await getTestCase(editTestCaseId);
+      const now = new Date().toISOString();
+      const tc: TestCase = existing
+        ? {
+            ...existing,
+            courseId: locationData.courseId || null,
+            courseName: locationData.courseName || null,
+            holes: locationData.holes,
+            landmarks: locationData.landmarks,
+            groups: locationData.groups,
+            locationData,
+            updatedAt: now,
+          }
+        : {
+            id: editTestCaseId,
+            name: selectedCourseName ? `${selectedCourseName} Mock` : "Untitled Test Case",
+            description: "",
+            courseId: locationData.courseId || null,
+            courseName: locationData.courseName || null,
+            holes: locationData.holes,
+            landmarks: locationData.landmarks,
+            groups: locationData.groups,
+            pacingRows: [],
+            events: [],
+            sessionJson: "",
+            locationData,
+            createdAt: now,
+            updatedAt: now,
+          };
+      await upsertTestCaseRecord(tc);
+      router.push(`/script-testing/test-cases/${editTestCaseId}`);
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : "Failed to save test case.");
+    }
   }
 
   const inputCls = "rounded border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-xs text-zinc-900 outline-none focus:border-zinc-400 focus:bg-white";
@@ -716,7 +759,7 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
         {exportMessage && <p className="mb-2 text-xs text-red-600">{exportMessage}</p>}
         <button
           type="button"
-          onClick={exportToTestCase}
+          onClick={() => void exportToTestCase()}
           disabled={exportMode === "existing" && !targetTestCaseId}
           className="w-full rounded-lg bg-zinc-900 px-3 py-2 text-xs font-medium text-white shadow-sm hover:bg-zinc-800 disabled:opacity-40"
         >
@@ -990,7 +1033,10 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
           <div className="group relative">
             <button
               type="button"
-              onClick={editTestCaseId ? saveToCurrentTestCase : openExportDialog}
+              onClick={() => {
+                if (editTestCaseId) void saveToCurrentTestCase();
+                else void openExportDialog();
+              }}
               disabled={players.length === 0 || snapshots.length === 0}
               className="flex items-center justify-center rounded-lg border border-zinc-200 bg-white p-2 text-zinc-600 shadow-sm hover:bg-zinc-50 disabled:opacity-40"
             >

@@ -3,7 +3,8 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { upsertTestCase } from "@/lib/testCases";
+import { upsertTestCaseRecord } from "@/app/actions";
+import type { LocationData, TestCaseCartPath } from "@/lib/testCases";
 
 const SessionMap = dynamic(() => import("./SessionMap"), { ssr: false });
 
@@ -14,6 +15,11 @@ type Hole = {
   green_lat: number;
   green_lng: number;
   allotted_time: number;
+  cart_paths?: {
+    label?: string | null;
+    path_type?: string | null;
+    coordinates: { lat: number; lng: number }[];
+  }[];
 };
 
 type CourseLandmark = {
@@ -21,6 +27,10 @@ type CourseLandmark = {
   landmark_type: "putting_green" | "clubhouse" | "driving_range" | "other";
   latitude: number;
   longitude: number;
+  endpoint1_latitude?: number | null;
+  endpoint1_longitude?: number | null;
+  endpoint2_latitude?: number | null;
+  endpoint2_longitude?: number | null;
 };
 
 type Group = {
@@ -44,6 +54,7 @@ type PlayerLocation = {
 type Player = {
   user_id: string;
   email?: string | null;
+  using_carts?: boolean;
   locations: PlayerLocation[];
 };
 
@@ -130,6 +141,75 @@ function sameCenter(
   if (!a && !b) return true;
   if (!a || !b) return false;
   return Math.abs(a[0] - b[0]) < epsilon && Math.abs(a[1] - b[1]) < epsilon;
+}
+
+function sessionExportToLocationData(data: SessionExport): LocationData {
+  const usingCartsByPlayer = new Map<string, boolean>();
+  for (const group of data.groups) {
+    for (const player of group.players ?? []) {
+      usingCartsByPlayer.set(player.user_id, player.using_carts);
+    }
+  }
+
+  const cartPaths: TestCaseCartPath[] = data.holes.flatMap((hole) =>
+    (hole.cart_paths ?? []).map((cartPath) => ({
+      holeNumber: hole.hole_number,
+      label: cartPath.label ?? null,
+      pathType: cartPath.path_type ?? "cart_path",
+      coordinates: cartPath.coordinates ?? [],
+    }))
+  );
+
+  return {
+    courseId: data.course_id || "",
+    courseName: data.course_name || "",
+    holes: data.holes.map((hole) => ({
+      holeNumber: hole.hole_number,
+      teeLat: hole.tee_lat,
+      teeLng: hole.tee_lng,
+      greenLat: hole.green_lat,
+      greenLng: hole.green_lng,
+      allottedTime: hole.allotted_time,
+    })),
+    landmarks: (data.course_landmarks ?? []).map((landmark) => ({
+      id: landmark.id,
+      landmarkType: landmark.landmark_type,
+      endpoint1Lat: landmark.endpoint1_latitude ?? landmark.latitude,
+      endpoint1Lng: landmark.endpoint1_longitude ?? landmark.longitude,
+      ...(landmark.endpoint2_latitude != null && landmark.endpoint2_longitude != null
+        ? {
+            endpoint2Lat: landmark.endpoint2_latitude,
+            endpoint2Lng: landmark.endpoint2_longitude,
+          }
+        : {}),
+    })),
+    cartPaths,
+    groups: data.groups.map((group) => ({
+      localId: group.group_id,
+      label: group.label ?? group.group_id,
+      teeTime: group.tee_time ?? "",
+      startHole: group.start_hole ?? 1,
+    })),
+    players: data.players.map((player) => {
+      const groupId =
+        data.groups.find((group) =>
+          (group.players ?? []).some((groupPlayer) => groupPlayer.user_id === player.user_id) ||
+          (group.player_user_ids ?? []).includes(player.user_id)
+        )?.group_id ?? null;
+
+      return {
+        localId: player.user_id,
+        name: player.email ?? player.user_id,
+        groupId,
+        usingCarts: player.using_carts ?? usingCartsByPlayer.get(player.user_id) ?? false,
+        locations: player.locations.map((loc) => ({
+          lat: loc.latitude,
+          lng: loc.longitude,
+          timestamp: loc.recorded_at,
+        })),
+      };
+    }),
+  };
 }
 
 export default function SessionVisualizer({ completedSessions }: { completedSessions: SessionOption[] }) {
@@ -538,24 +618,25 @@ export default function SessionVisualizer({ completedSessions }: { completedSess
                 type="button"
                 disabled={!jsonText}
                 onClick={() => {
+                  if (!data) return;
                   const newId = crypto.randomUUID();
-                  upsertTestCase({
+                  const locationData = sessionExportToLocationData(data);
+                  void upsertTestCaseRecord({
                     id: newId,
                     name: data?.session_name ?? "Imported Session",
                     description: "",
                     courseId: data?.course_id ?? null,
                     courseName: data?.course_name ?? null,
-                    holes: [],
-                    landmarks: [],
-                    groups: [],
+                    holes: locationData.holes,
+                    landmarks: locationData.landmarks,
+                    groups: locationData.groups,
                     pacingRows: [],
                     events: [],
                     sessionJson: jsonText,
-                    locationData: null,
+                    locationData,
                     createdAt: new Date().toISOString(),
                     updatedAt: new Date().toISOString(),
-                  });
-                  router.push(`/script-testing/test-cases/${newId}`);
+                  }).then(() => router.push(`/script-testing/test-cases/${newId}`));
                 }}
                 className="rounded-lg border border-zinc-200 bg-white p-2 text-zinc-600 shadow-sm hover:bg-zinc-50 disabled:opacity-40 disabled:cursor-not-allowed flex items-center"
               >

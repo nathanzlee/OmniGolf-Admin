@@ -1,11 +1,31 @@
 "use server";
 
 import { supabaseServer } from "@/lib/supabase/server";
+import type { TestCase } from "@/lib/testCases";
 
 function assertUuid(id: string, label: string) {
   const uuid =
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   if (!uuid.test(id)) throw new Error(`Invalid UUID for ${label}: "${id}"`);
+}
+
+function isUuid(id: string | null | undefined) {
+  if (!id) return false;
+  const uuid =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i;
+  return uuid.test(id);
+}
+
+function toIsoOrNow(value: string | null | undefined) {
+  if (!value) return new Date().toISOString();
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
+}
+
+function getLocalTestCaseCourseId(tc: TestCase) {
+  const locationData = tc.locationData as (TestCase["locationData"] & { course_id?: string }) | null;
+  const maybeCourseId = tc.courseId || locationData?.courseId || locationData?.course_id;
+  return isUuid(maybeCourseId) ? maybeCourseId : null;
 }
 
 /* =====================================================
@@ -768,4 +788,125 @@ export async function deleteSession(sessionId: string) {
   }
 
   return { ok: true };
+}
+
+/* =====================================================
+   Test case migration
+===================================================== */
+
+type TestCaseRow = {
+  id: string;
+  name: string | null;
+  description: string | null;
+  course_id: string | null;
+  groups: TestCase["groups"] | null;
+  pacing_rows: TestCase["pacingRows"] | null;
+  events: TestCase["events"] | null;
+  location_data: TestCase["locationData"] | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+function rowToTestCase(row: TestCaseRow): TestCase {
+  const locationData = row.location_data ?? null;
+
+  return {
+    id: row.id,
+    name: row.name?.trim() || "Untitled Test Case",
+    description: row.description ?? "",
+    courseId: row.course_id ?? locationData?.courseId ?? null,
+    courseName: locationData?.courseName ?? null,
+    holes: locationData?.holes ?? [],
+    landmarks: locationData?.landmarks ?? [],
+    groups: row.groups ?? locationData?.groups ?? [],
+    pacingRows: row.pacing_rows ?? [],
+    events: row.events ?? [],
+    sessionJson: "",
+    locationData,
+    createdAt: toIsoOrNow(row.created_at),
+    updatedAt: toIsoOrNow(row.updated_at),
+  };
+}
+
+function testCaseToRow(tc: TestCase) {
+  const id = isUuid(tc.id) ? tc.id : crypto.randomUUID();
+  const courseId = getLocalTestCaseCourseId(tc);
+  const now = new Date().toISOString();
+
+  return {
+    id,
+    name: tc.name?.trim() || "Untitled Test Case",
+    description: tc.description ?? "",
+    course_id: courseId,
+    groups: tc.groups ?? tc.locationData?.groups ?? [],
+    pacing_rows: tc.pacingRows ?? [],
+    events: tc.events ?? [],
+    location_data: tc.locationData ?? null,
+    created_at: toIsoOrNow(tc.createdAt),
+    updated_at: tc.updatedAt ? toIsoOrNow(tc.updatedAt) : now,
+  };
+}
+
+export async function listTestCases(): Promise<TestCase[]> {
+  const supabase = supabaseServer();
+  const { data, error } = await supabase
+    .from("test_cases")
+    .select("id, name, description, course_id, groups, pacing_rows, events, location_data, created_at, updated_at")
+    .order("updated_at", { ascending: false });
+
+  if (error) throw new Error(`listTestCases failed: ${error.message}`);
+  return ((data ?? []) as TestCaseRow[]).map(rowToTestCase);
+}
+
+export async function getTestCase(testCaseId: string): Promise<TestCase | null> {
+  assertUuid(testCaseId, "getTestCase.testCaseId");
+
+  const supabase = supabaseServer();
+  const { data, error } = await supabase
+    .from("test_cases")
+    .select("id, name, description, course_id, groups, pacing_rows, events, location_data, created_at, updated_at")
+    .eq("id", testCaseId)
+    .maybeSingle();
+
+  if (error) throw new Error(`getTestCase failed: ${error.message}`);
+  return data ? rowToTestCase(data as TestCaseRow) : null;
+}
+
+export async function upsertTestCaseRecord(tc: TestCase) {
+  const supabase = supabaseServer();
+  const row = testCaseToRow(tc);
+  const { error } = await supabase
+    .from("test_cases")
+    .upsert(row, { onConflict: "id" });
+
+  if (error) throw new Error(`upsertTestCaseRecord failed: ${error.message}`);
+  return { ok: true, testCaseId: row.id };
+}
+
+export async function deleteTestCaseRecord(testCaseId: string) {
+  assertUuid(testCaseId, "deleteTestCaseRecord.testCaseId");
+
+  const supabase = supabaseServer();
+  const { error } = await supabase
+    .from("test_cases")
+    .delete()
+    .eq("id", testCaseId);
+
+  if (error) throw new Error(`deleteTestCaseRecord failed: ${error.message}`);
+  return { ok: true };
+}
+
+export async function migrateLocalTestCasesBatch(cases: TestCase[]) {
+  if (!Array.isArray(cases)) throw new Error("Expected an array of test cases.");
+  if (cases.length === 0) return { ok: true, count: 0 };
+
+  const rows = cases.map(testCaseToRow);
+
+  const supabase = supabaseServer();
+  const { error } = await supabase
+    .from("test_cases")
+    .upsert(rows, { onConflict: "id" });
+
+  if (error) throw new Error(`migrateLocalTestCasesBatch failed: ${error.message}`);
+  return { ok: true, count: rows.length };
 }
