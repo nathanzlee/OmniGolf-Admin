@@ -66,6 +66,10 @@ function advanceByMinutes(ts: string, minutes: number) {
   return formatDateTimeLocal(d);
 }
 
+function timestampsMatch(a: string, b: string) {
+  return a === b;
+}
+
 function sortSnapshotsByTimestamp(items: Snapshot[]) {
   return items
     .map((snapshot, index) => ({ snapshot, index }))
@@ -332,6 +336,11 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
     return snap.timestamp < group.teeTime;
   }
 
+  function getTeeTimeGroupsForSnapshot(snap: Snapshot | null) {
+    if (!snap) return [];
+    return groups.filter((g) => g.teeTime && timestampsMatch(g.teeTime, snap.timestamp));
+  }
+
   const snapshotLocs = useMemo(
     () => (activeSnapshot ? locations.filter((l) => l.snapshotId === activeSnapshot.localId) : []),
     [locations, activeSnapshot]
@@ -346,6 +355,10 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
   const activePlayerObj = players.find((p) => p.localId === activePlayerId) ?? null;
   const isCurrentPlayerBlocked = activePlayerObj ? isBlockedAtSnapshot(activeSnapshot, activePlayerObj) : false;
   const isPlacing = !!activePlayerId && !!activeSnapshot && !isCurrentPlayerBlocked;
+  const nextManualSnapshotTs = activeSnapshot ? advanceByMinutes(activeSnapshot.timestamp, 1) : defaultTimestamp();
+  const canAddSnapshot =
+    snapshots.length === 0 ||
+    !snapshots.some((s) => timestampsMatch(s.timestamp, nextManualSnapshotTs));
 
   const pins = useMemo<LocationPin[]>(() => {
     return filteredPlayers.flatMap((player) => {
@@ -405,6 +418,7 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
     if ("teeTime" in patch) {
       const newTeeTime = patch.teeTime ?? "";
       const existingSnap = snapshots.find((s) => s.sourceGroupId === id);
+      const activeSnapshotId = snapshots[activeSnapshotIdx]?.localId;
       if (!newTeeTime) {
         if (existingSnap) {
           setLocations((prev) => prev.filter((l) => l.snapshotId !== existingSnap.localId));
@@ -415,7 +429,28 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
           });
         }
       } else if (existingSnap) {
-        const activeSnapshotId = snapshots[activeSnapshotIdx]?.localId;
+        const duplicateSnap = snapshots.find((s) => s.localId !== existingSnap.localId && timestampsMatch(s.timestamp, newTeeTime));
+        if (duplicateSnap) {
+          setLocations((prev) => {
+            const duplicatePlayerIds = new Set(
+              prev.filter((l) => l.snapshotId === duplicateSnap.localId).map((l) => l.playerId)
+            );
+            return prev.flatMap((loc) => {
+              if (loc.snapshotId !== existingSnap.localId) return [loc];
+              if (duplicatePlayerIds.has(loc.playerId)) return [];
+              return [{ ...loc, localId: makeId(), snapshotId: duplicateSnap.localId }];
+            });
+          });
+          setSnapshots((prev) => {
+            const next = prev.filter((s) => s.localId !== existingSnap.localId);
+            const nextActiveId = activeSnapshotId === existingSnap.localId ? duplicateSnap.localId : activeSnapshotId;
+            if (nextActiveId) {
+              setActiveSnapshotIdx(Math.max(0, next.findIndex((s) => s.localId === nextActiveId)));
+            }
+            return next;
+          });
+          return;
+        }
         setSnapshots((prev) => {
           const next = sortSnapshotsByTimestamp(
             prev.map((s) => s.localId === existingSnap.localId ? { ...s, timestamp: newTeeTime } : s)
@@ -426,7 +461,10 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
           return next;
         });
       } else {
-        setSnapshots((prev) => sortSnapshotsByTimestamp([...prev, { localId: makeId(), timestamp: newTeeTime, sourceGroupId: id }]));
+        setSnapshots((prev) => {
+          if (prev.some((s) => timestampsMatch(s.timestamp, newTeeTime))) return prev;
+          return sortSnapshotsByTimestamp([...prev, { localId: makeId(), timestamp: newTeeTime, sourceGroupId: id }]);
+        });
       }
     }
   }
@@ -483,8 +521,8 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
   // ── Snapshots ─────────────────────────────────────────────────
 
   function addSnapshot() {
-    const lastTs = snapshots.length > 0 ? snapshots[snapshots.length - 1].timestamp : defaultTimestamp();
-    const ts = snapshots.length > 0 ? advanceByMinutes(lastTs, 1) : lastTs;
+    if (!canAddSnapshot) return;
+    const ts = snapshots.length > 0 ? nextManualSnapshotTs : defaultTimestamp();
     const localId = makeId();
     setSnapshots((prev) => {
       const next = sortSnapshotsByTimestamp([...prev, { localId, timestamp: ts, sourceGroupId: null }]);
@@ -495,6 +533,7 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
 
   function removeSnapshot(idx: number) {
     const snap = snapshots[idx];
+    if (getTeeTimeGroupsForSnapshot(snap).length > 0) return;
     setLocations((prev) => prev.filter((l) => l.snapshotId !== snap.localId));
     setSnapshots((prev) => {
       const next = prev.filter((_, i) => i !== idx);
@@ -700,9 +739,9 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
   }
 
   const inputCls = "rounded border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-xs text-zinc-900 outline-none focus:border-zinc-400 focus:bg-white";
-  const activeSnapSourceGroup = activeSnapshot?.sourceGroupId
-    ? groups.find((g) => g.localId === activeSnapshot.sourceGroupId)
-    : null;
+  const activeSnapTeeTimeGroups = getTeeTimeGroupsForSnapshot(activeSnapshot);
+  const activeSnapSourceGroup = activeSnapTeeTimeGroups[0] ?? null;
+  const activeSnapshotIsTeeTime = activeSnapTeeTimeGroups.length > 0;
 
   const exportModal = exportOpen ? (
     <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/30 px-4">
@@ -902,7 +941,15 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
         <div className="rounded-xl border border-zinc-200 bg-white shadow-sm">
           <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-2.5">
             <h2 className="text-sm font-semibold text-zinc-900">Snapshots</h2>
-            <button type="button" onClick={addSnapshot} className="text-xs font-medium text-zinc-600 hover:text-zinc-900">+ Add</button>
+            <button
+              type="button"
+              onClick={addSnapshot}
+              disabled={!canAddSnapshot}
+              title={!canAddSnapshot ? `${nextManualSnapshotTs.replace("T", " ")} already exists` : "Add snapshot"}
+              className="text-xs font-medium text-zinc-600 hover:text-zinc-900 disabled:cursor-not-allowed disabled:text-zinc-300"
+            >
+              + Add
+            </button>
           </div>
 
           {snapshots.length === 0 ? (
@@ -946,7 +993,9 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
                 <button
                   type="button"
                   onClick={() => removeSnapshot(activeSnapshotIdx)}
-                  className="ml-0.5 shrink-0 text-xs text-zinc-300 hover:text-red-500"
+                  disabled={activeSnapshotIsTeeTime}
+                  title={activeSnapshotIsTeeTime ? "Tee time snapshots cannot be deleted" : "Delete snapshot"}
+                  className="ml-0.5 shrink-0 text-xs text-zinc-300 hover:text-red-500 disabled:cursor-not-allowed disabled:hover:text-zinc-300"
                 >
                   ✕
                 </button>
