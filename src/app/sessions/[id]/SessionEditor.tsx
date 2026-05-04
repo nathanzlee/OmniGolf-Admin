@@ -331,6 +331,7 @@ export default function SessionEditor({
   }
 
   function removePacingRow(id: string) {
+    if (!window.confirm("Delete this pacing row? This cannot be undone.")) return;
     setPacingRows((prev) => prev.filter((r) => r.id !== id));
   }
 
@@ -368,6 +369,7 @@ export default function SessionEditor({
   }
 
   function removeSessionEvent(id: string) {
+    if (!window.confirm("Delete this event? This cannot be undone.")) return;
     setSessionEvents((prev) => prev.filter((e) => e.id !== id));
   }
 
@@ -396,6 +398,7 @@ export default function SessionEditor({
   }
 
   function removeGroup(localId: string) {
+    if (!window.confirm("Delete this group? Player assignments in this group will be removed.")) return;
     setGroups((prev) => prev.filter((g) => g.localId !== localId));
   }
 
@@ -477,8 +480,8 @@ export default function SessionEditor({
         groups: toPayload(),
       });
       setMessage("✅ Saved changes.");
-    } catch (e: any) {
-      setMessage(`❌ ${e?.message ?? "Failed to save session"}`);
+    } catch (e: unknown) {
+      setMessage(`❌ ${e instanceof Error ? e.message : "Failed to save session"}`);
     } finally {
       setIsSaving(false);
     }
@@ -521,8 +524,8 @@ export default function SessionEditor({
       a.download = `session_${session.id}_export.json`;
       a.click();
       URL.revokeObjectURL(url);
-    } catch (e: any) {
-      window.alert(`Download failed: ${e?.message ?? "unknown error"}`);
+    } catch (e: unknown) {
+      window.alert(`Download failed: ${e instanceof Error ? e.message : "unknown error"}`);
     } finally {
       setIsDownloading(false);
     }
@@ -540,8 +543,8 @@ export default function SessionEditor({
       await deleteSession(session.id);
       router.push("/sessions");
       router.refresh();
-    } catch (e: any) {
-      setMessage(`❌ ${e?.message ?? "Failed to delete session"}`);
+    } catch (e: unknown) {
+      setMessage(`❌ ${e instanceof Error ? e.message : "Failed to delete session"}`);
     } finally {
       setIsDeleting(false);
     }

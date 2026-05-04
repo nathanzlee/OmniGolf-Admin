@@ -60,8 +60,8 @@ export default function NewSessionPage() {
         ]);
         setCourses(courseResult);
         setUsers(userResult);
-      } catch (e: any) {
-        setMessage(`❌ ${e?.message ?? "Failed to load form data"}`);
+      } catch (e: unknown) {
+        setMessage(`❌ ${e instanceof Error ? e.message : "Failed to load form data"}`);
       }
     }
 
@@ -87,6 +87,7 @@ export default function NewSessionPage() {
   }
 
   function removeGroup(localId: string) {
+    if (!window.confirm("Delete this group? Player assignments in this group will be removed.")) return;
     setGroups((prev) => prev.filter((g) => g.localId !== localId));
   }
 
@@ -165,8 +166,8 @@ export default function NewSessionPage() {
       });
 
       router.replace(`/sessions/${result.sessionId}`);
-    } catch (e: any) {
-      setMessage(`❌ ${e?.message ?? "Failed to save session"}`);
+    } catch (e: unknown) {
+      setMessage(`❌ ${e instanceof Error ? e.message : "Failed to save session"}`);
     } finally {
       setIsSaving(false);
     }

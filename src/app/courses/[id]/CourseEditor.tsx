@@ -272,6 +272,7 @@ export default function CourseEditor({
   }
 
   function removeLandmark(index: number) {
+    if (!window.confirm("Delete this landmark? This cannot be undone.")) return;
     setLandmarks((prev) => prev.filter((_, i) => i !== index));
   }
 
@@ -310,8 +311,8 @@ export default function CourseEditor({
         landmarks: toLandmarkPayload(),
       });
       setStatus("✅ Saved changes.");
-    } catch (e: any) {
-      setStatus(`❌ ${e?.message ?? "Failed to save"}`);
+    } catch (e: unknown) {
+      setStatus(`❌ ${e instanceof Error ? e.message : "Failed to save"}`);
     } finally {
       setIsSaving(false);
     }
@@ -331,8 +332,8 @@ export default function CourseEditor({
       await deleteCourse(course.id);
       router.push("/courses");
       router.refresh();
-    } catch (e: any) {
-      setStatus(`❌ ${e?.message ?? "Failed to delete course"}`);
+    } catch (e: unknown) {
+      setStatus(`❌ ${e instanceof Error ? e.message : "Failed to delete course"}`);
     } finally {
       setIsDeleting(false);
     }
@@ -346,8 +347,8 @@ export default function CourseEditor({
       const parsed = parseCsv(text);
       setHoles(parsed);
       setStatus("✅ CSV imported into the form.");
-    } catch (e: any) {
-      setStatus(`❌ ${e?.message ?? "Failed to import CSV"}`);
+    } catch (e: unknown) {
+      setStatus(`❌ ${e instanceof Error ? e.message : "Failed to import CSV"}`);
     }
   }
 
@@ -385,8 +386,8 @@ export default function CourseEditor({
       URL.revokeObjectURL(url);
 
       setStatus("✅ CSV exported.");
-    } catch (e: any) {
-      setStatus(`❌ ${e?.message ?? "Failed to export CSV"}`);
+    } catch (e: unknown) {
+      setStatus(`❌ ${e instanceof Error ? e.message : "Failed to export CSV"}`);
     }
   }
 

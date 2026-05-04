@@ -3,9 +3,19 @@ import ScriptTestingSubnav from "../ScriptTestingSubnav";
 import TestCaseBuilder from "./TestCaseBuilder";
 import { Suspense } from "react";
 import { listCoursesForSelect } from "@/app/actions";
+import { redirect } from "next/navigation";
 
-export default async function TestCaseBuilderPage() {
-  const courseOptions = await listCoursesForSelect();
+export default async function TestCaseBuilderPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ tcId?: string }>;
+}) {
+  const [courseOptions, { tcId }] = await Promise.all([
+    listCoursesForSelect(),
+    searchParams,
+  ]);
+
+  if (!tcId) redirect("/script-testing/test-cases");
 
   return (
     <main className="h-screen overflow-hidden bg-zinc-50">

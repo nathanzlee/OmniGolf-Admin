@@ -220,6 +220,7 @@ export default function TestCaseEditor({
   }
 
   function removePacingRow(rowId: string) {
+    if (!window.confirm("Delete this pacing row? This cannot be undone.")) return;
     setPacingRows((prev) => prev.filter((r) => r.id !== rowId));
   }
 
@@ -255,6 +256,7 @@ export default function TestCaseEditor({
   }
 
   function removeEvent(evId: string) {
+    if (!window.confirm("Delete this event? This cannot be undone.")) return;
     setEvents((prev) => prev.filter((e) => e.id !== evId));
   }
 

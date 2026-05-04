@@ -829,12 +829,15 @@ function rowToTestCase(row: TestCaseRow): TestCase {
 }
 
 function testCaseToRow(tc: TestCase) {
-  const id = isUuid(tc.id) ? tc.id : crypto.randomUUID();
+  if (!isUuid(tc.id)) {
+    throw new Error(`Invalid test case id: "${tc.id}"`);
+  }
+
   const courseId = getLocalTestCaseCourseId(tc);
   const now = new Date().toISOString();
 
   return {
-    id,
+    id: tc.id,
     name: tc.name?.trim() || "Untitled Test Case",
     description: tc.description ?? "",
     course_id: courseId,
@@ -855,7 +858,17 @@ export async function listTestCases(): Promise<TestCase[]> {
     .order("updated_at", { ascending: false });
 
   if (error) throw new Error(`listTestCases failed: ${error.message}`);
-  return ((data ?? []) as TestCaseRow[]).map(rowToTestCase);
+
+  const latestById = new Map<string, TestCase>();
+  for (const row of (data ?? []) as TestCaseRow[]) {
+    const testCase = rowToTestCase(row);
+    const existing = latestById.get(testCase.id);
+    if (!existing || testCase.updatedAt > existing.updatedAt) {
+      latestById.set(testCase.id, testCase);
+    }
+  }
+
+  return [...latestById.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
 export async function getTestCase(testCaseId: string): Promise<TestCase | null> {
@@ -866,6 +879,8 @@ export async function getTestCase(testCaseId: string): Promise<TestCase | null> 
     .from("test_cases")
     .select("id, name, description, course_id, groups, pacing_rows, events, location_data, created_at, updated_at")
     .eq("id", testCaseId)
+    .order("updated_at", { ascending: false })
+    .limit(1)
     .maybeSingle();
 
   if (error) throw new Error(`getTestCase failed: ${error.message}`);

@@ -16,6 +16,10 @@ const GROUP_COLORS = [
 const UNASSIGNED_COLOR = "#6b7280";
 const STORAGE_KEY = "test-case-builder-state-v1";
 
+function getStorageKey(testCaseId: string | null) {
+  return testCaseId ? `${STORAGE_KEY}:${testCaseId}` : STORAGE_KEY;
+}
+
 function makeId() {
   return Math.random().toString(36).slice(2);
 }
@@ -110,6 +114,7 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
   const [mapInitView, setMapInitView] = useState<{ center: [number, number]; zoom: number } | null>(null);
   const [mapReady, setMapReady] = useState(false);
   const activeSnapshot = snapshots[activeSnapshotIdx] ?? null;
+  const storageKey = getStorageKey(editTestCaseId);
 
   // ── LocalStorage ──────────────────────────────────────────────
 
@@ -228,6 +233,23 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
     }
   }
 
+  const buildSavedState = useCallback((): SavedState => {
+    return {
+      selectedCourseId,
+      selectedCourseName,
+      groups,
+      players,
+      snapshots,
+      locations,
+      activeSnapshotIdx,
+      courseHoles,
+      courseLandmarks,
+      courseCartPaths,
+      mapCenter: mapViewRef.current.center,
+      mapZoom: mapViewRef.current.zoom,
+    };
+  }, [activeSnapshotIdx, courseCartPaths, courseHoles, courseLandmarks, groups, locations, players, selectedCourseId, selectedCourseName, snapshots]);
+
   // Auto-load on mount
   useEffect(() => {
     if (editTestCaseId) {
@@ -235,7 +257,7 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
       return;
     }
 
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = window.localStorage.getItem(storageKey);
     if (!raw) {
       setMapReady(true);
       return;
@@ -246,7 +268,7 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
     } catch { /* ignore */ } finally {
       setTimeout(() => { restoringRef.current = false; setMapReady(true); }, 0);
     }
-  }, [applyLocationData, editTestCaseId]);
+  }, [applyLocationData, editTestCaseId, storageKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -266,12 +288,28 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
       };
     }
 
+    const raw = window.localStorage.getItem(storageKey);
+    let restoredFromLocalStorage = false;
+    if (raw) {
+      try {
+        restoringRef.current = true;
+        applyState(JSON.parse(raw) as SavedState);
+        restoredFromLocalStorage = true;
+        setExportMode("existing");
+        setTargetTestCaseId(editTestCaseId);
+        setExportName("");
+        setTimeout(() => { restoringRef.current = false; setMapReady(true); }, 0);
+      } catch {
+        window.localStorage.removeItem(storageKey);
+      }
+    }
+
     restoringRef.current = true;
     getTestCase(editTestCaseId)
       .then((tc) => {
         if (cancelled) return;
         setCurrentTestCase(tc);
-        if (tc?.locationData) {
+        if (!restoredFromLocalStorage && tc?.locationData) {
           applyLocationData(tc.locationData);
           if (!tc.locationData.cartPaths?.length && tc.locationData.courseId) {
             void loadMissingCartPaths(tc.locationData.courseId);
@@ -290,30 +328,22 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
         }
       })
       .finally(() => {
-        if (!cancelled) setTimeout(() => { restoringRef.current = false; }, 0);
+        if (!cancelled) setTimeout(() => { restoringRef.current = false; setMapReady(true); }, 0);
       });
 
     return () => {
       cancelled = true;
     };
-  }, [applyLocationData, editTestCaseId, resetBuilderState]);
+  }, [applyLocationData, editTestCaseId, resetBuilderState, storageKey]);
 
   // Auto-save on state changes
   useEffect(() => {
-    if (editTestCaseId) return;
     if (restoringRef.current) return;
-    const payload: SavedState = {
-      selectedCourseId, selectedCourseName,
-      groups, players, snapshots, locations, activeSnapshotIdx,
-      courseHoles, courseLandmarks, courseCartPaths,
-      mapCenter: mapViewRef.current.center,
-      mapZoom: mapViewRef.current.zoom,
-    };
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-  }, [editTestCaseId, selectedCourseId, selectedCourseName, groups, players, snapshots, locations, activeSnapshotIdx, courseHoles, courseLandmarks, courseCartPaths]);
+    window.localStorage.setItem(storageKey, JSON.stringify(buildSavedState()));
+  }, [buildSavedState, storageKey]);
 
   function clearState() {
-    if (!editTestCaseId) window.localStorage.removeItem(STORAGE_KEY);
+    window.localStorage.removeItem(storageKey);
     resetBuilderState();
   }
 
@@ -470,6 +500,7 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
   }
 
   function removeGroup(id: string) {
+    if (!window.confirm("Delete this group? Player assignments and its tee time snapshot will be updated.")) return;
     const snap = snapshots.find((s) => s.sourceGroupId === id);
     if (snap) {
       setLocations((prev) => prev.filter((l) => l.snapshotId !== snap.localId));
@@ -507,6 +538,7 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
   }
 
   function removePlayer(id: string) {
+    if (!window.confirm("Delete this player and all of their locations?")) return;
     setPlayers((prev) => prev.filter((p) => p.localId !== id));
     setLocations((prev) => prev.filter((l) => l.playerId !== id));
     if (activePlayerId === id) setActivePlayerId(null);
@@ -534,6 +566,7 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
   function removeSnapshot(idx: number) {
     const snap = snapshots[idx];
     if (getTeeTimeGroupsForSnapshot(snap).length > 0) return;
+    if (!window.confirm("Delete this snapshot and all locations placed at this timestamp?")) return;
     setLocations((prev) => prev.filter((l) => l.snapshotId !== snap.localId));
     setSnapshots((prev) => {
       const next = prev.filter((_, i) => i !== idx);
@@ -1154,9 +1187,8 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
             onMapClick={handleMapClick}
             onViewChange={(center, zoom) => {
               mapViewRef.current = { center, zoom };
-              if (editTestCaseId) return;
               try {
-                const raw = window.localStorage.getItem(STORAGE_KEY);
+                const raw = window.localStorage.getItem(storageKey);
                 const parsed = raw
                   ? JSON.parse(raw)
                   : {
@@ -1173,7 +1205,7 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
                     };
                 parsed.mapCenter = center;
                 parsed.mapZoom = zoom;
-                window.localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
+                window.localStorage.setItem(storageKey, JSON.stringify(parsed));
               } catch { /* ignore */ }
             }}
           />

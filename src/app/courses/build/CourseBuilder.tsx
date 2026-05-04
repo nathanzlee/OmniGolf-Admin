@@ -434,6 +434,7 @@ export default function CourseBuilder({
   }
 
   function removeCartPath(i: number) {
+    if (!window.confirm("Delete this cart path? This cannot be undone.")) return;
     setCartPaths((prev) => prev.filter((_, idx) => idx !== i));
     setActiveField((af) => {
       if (!af || af.kind !== "cartPath") return af;
@@ -506,6 +507,7 @@ export default function CourseBuilder({
   }
 
   function removeLandmark(i: number) {
+    if (!window.confirm("Delete this landmark? This cannot be undone.")) return;
     setLandmarks((prev) => prev.filter((_, idx) => idx !== i));
     setActiveField((af) => {
       if (!af) return null;
@@ -703,6 +705,7 @@ export default function CourseBuilder({
                     <button
                       type="button"
                       onClick={() => {
+                        if (!window.confirm("Delete this cart path point? This cannot be undone.")) return;
                         if (selectedWaypointIndex === idx) setSelectedWaypointIndex(null);
                         else if (selectedWaypointIndex !== null && selectedWaypointIndex > idx)
                           setSelectedWaypointIndex(selectedWaypointIndex - 1);
