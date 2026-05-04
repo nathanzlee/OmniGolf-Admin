@@ -429,8 +429,9 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
 
     if (!activePlayerId || !isPlacing) return currentPins;
     const activePlayer = players.find((p) => p.localId === activePlayerId);
+    const activePlayerCurrentLoc = snapshotLocs.find((l) => l.playerId === activePlayerId);
     const prevLoc = getPreviousPlayerLoc(activePlayerId);
-    if (!activePlayer || !prevLoc) return currentPins;
+    if (!activePlayer || activePlayerCurrentLoc || !prevLoc) return currentPins;
 
     return [
       ...currentPins,
