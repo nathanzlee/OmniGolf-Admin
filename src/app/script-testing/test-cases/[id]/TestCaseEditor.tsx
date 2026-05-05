@@ -17,7 +17,9 @@ import {
   LocationData,
   LandmarkOption,
   PacingEventType,
+  TEST_CASE_LABEL_OPTIONS,
   TestCaseEventType,
+  TestCaseLabel,
   buildLandmarkOptions,
   testCaseToExportJsonWithCourseData,
 } from "@/lib/testCases";
@@ -32,6 +34,8 @@ const EVENT_TYPES: TestCaseEventType[] = [
   "group split",
   "group join",
   "leave course",
+  "skip_hole",
+  "pass_group",
 ];
 
 const inputClass =
@@ -79,6 +83,7 @@ export default function TestCaseEditor({
   const [sessionJson, setSessionJson] = useState("");
   const [locationData, setLocationData] = useState<LocationData | null>(null);
   const [groups, setGroups] = useState<TestCaseGroup[]>([]);
+  const [labels, setLabels] = useState<TestCaseLabel[]>([]);
   const [holes, setHoles] = useState<TestCaseHole[]>([]);
   const [landmarks, setLandmarks] = useState<TestCaseLandmark[]>([]);
   const [pacingRows, setPacingRows] = useState<PacingRowUI[]>([]);
@@ -111,6 +116,7 @@ export default function TestCaseEditor({
           setSessionJson(tc.sessionJson ?? "");
           setLocationData(tc.locationData ?? null);
           setGroups(tc.groups);
+          setLabels(tc.labels ?? []);
           setHoles(tc.holes);
           setLandmarks(tc.landmarks);
           setPacingRows(tc.pacingRows);
@@ -260,6 +266,12 @@ export default function TestCaseEditor({
     setEvents((prev) => prev.filter((e) => e.id !== evId));
   }
 
+  function toggleLabel(label: TestCaseLabel) {
+    setLabels((prev) =>
+      prev.includes(label) ? prev.filter((item) => item !== label) : [...prev, label]
+    );
+  }
+
   // ── Save / Delete ───────────────────────────────────────────────────────────
 
   function buildTestCase(): TestCase {
@@ -272,6 +284,7 @@ export default function TestCaseEditor({
       holes,
       landmarks,
       groups,
+      labels,
       pacingRows: pacingRows.filter((r) => r.eventType !== "").map((r) => r as TestCasePacingRow),
       events: events.filter((e) => e.eventType !== "").map((e) => e as TestCaseEventRow),
       sessionJson,
@@ -415,6 +428,33 @@ export default function TestCaseEditor({
                 rows={3}
                 className={inputClass + " w-full resize-none"}
               />
+            </div>
+
+            <div>
+              <label className="mb-2 block text-sm font-medium text-zinc-700">Labels</label>
+              <div className="flex flex-wrap gap-2">
+                {TEST_CASE_LABEL_OPTIONS.map((label) => {
+                  const selected = labels.includes(label);
+                  return (
+                    <label
+                      key={label}
+                      className={`inline-flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
+                        selected
+                          ? "border-zinc-900 bg-zinc-900 text-white"
+                          : "border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        onChange={() => toggleLabel(label)}
+                        className="sr-only"
+                      />
+                      {label}
+                    </label>
+                  );
+                })}
+              </div>
             </div>
 
           </div>

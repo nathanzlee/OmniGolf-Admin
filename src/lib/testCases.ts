@@ -1,7 +1,36 @@
 // Shared types and helpers for test cases (stored in localStorage)
 
 export type PacingEventType = "hole" | "off course";
-export type TestCaseEventType = "behind pace" | "group split" | "group join" | "leave course";
+export type TestCaseEventType =
+  | "behind pace"
+  | "group split"
+  | "group join"
+  | "leave course"
+  | "skip_hole"
+  | "pass_group";
+
+export type TestCaseLabel =
+  | "Leave Course"
+  | "Group Join"
+  | "Group Split"
+  | "Behind Pace"
+  | "Skip Hole"
+  | "Pass Group"
+  | "Riders Only"
+  | "Walkers Only"
+  | "Walkers/Riders";
+
+export const TEST_CASE_LABEL_OPTIONS: TestCaseLabel[] = [
+  "Leave Course",
+  "Group Join",
+  "Group Split",
+  "Behind Pace",
+  "Skip Hole",
+  "Pass Group",
+  "Riders Only",
+  "Walkers Only",
+  "Walkers/Riders",
+];
 
 export type TestCaseGroup = {
   localId: string;
@@ -68,6 +97,8 @@ export type LocationData = {
   cartPaths?: TestCaseCartPath[];
   groups: TestCaseGroup[];
   players: LocationDataPlayer[];
+  mapCenter?: [number, number];
+  mapZoom?: number;
 };
 
 export type TestCase = {
@@ -79,6 +110,7 @@ export type TestCase = {
   holes: TestCaseHole[];
   landmarks: TestCaseLandmark[];
   groups: TestCaseGroup[];
+  labels: TestCaseLabel[];
   pacingRows: TestCasePacingRow[];
   events: TestCaseEventRow[];
   sessionJson: string;
@@ -103,6 +135,36 @@ const LANDMARK_LABELS: Record<string, string> = {
   driving_range: "Driving Range",
   other: "Other",
 };
+
+function toIsoString(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString();
+}
+
+function earliestLocationIso(players: LocationDataPlayer[], groupId?: string) {
+  const timestamps = players
+    .filter((p) => !groupId || p.groupId === groupId)
+    .flatMap((p) => p.locations.map((loc) => new Date(loc.timestamp).getTime()))
+    .filter((ts) => Number.isFinite(ts));
+
+  if (timestamps.length === 0) return null;
+  return new Date(Math.min(...timestamps)).toISOString();
+}
+
+function fallbackGroupTeeTimeIso(
+  locationData: LocationData,
+  groupId: string,
+  createdAt: string
+) {
+  return (
+    earliestLocationIso(locationData.players, groupId) ??
+    earliestLocationIso(locationData.players) ??
+    toIsoString(createdAt) ??
+    new Date().toISOString()
+  );
+}
 
 export function loadTestCases(): TestCase[] {
   if (typeof window === "undefined") return [];
@@ -230,7 +292,7 @@ export function testCaseToExportJson(tc: TestCase): object {
       groups: locationData.groups.map((g) => ({
         group_id: g.localId,
         label: g.label,
-        tee_time: g.teeTime ? new Date(g.teeTime).toISOString() : null,
+        tee_time: toIsoString(g.teeTime) ?? fallbackGroupTeeTimeIso(locationData, g.localId, tc.createdAt),
         start_hole: g.startHole ?? 1,
         players: locationData.players
           .filter((p) => p.groupId === g.localId)

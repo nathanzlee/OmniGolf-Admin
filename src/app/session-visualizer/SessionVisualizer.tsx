@@ -630,6 +630,7 @@ export default function SessionVisualizer({ completedSessions }: { completedSess
                     holes: locationData.holes,
                     landmarks: locationData.landmarks,
                     groups: locationData.groups,
+                    labels: [],
                     pacingRows: [],
                     events: [],
                     sessionJson: jsonText,

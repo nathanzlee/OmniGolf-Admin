@@ -231,7 +231,12 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
     setActiveSnapshotIdx(0);
     setActivePlayerId(null);
     setActiveGroupId(null);
-    fitMapToLocationData(data);
+    if (data.mapCenter && data.mapZoom != null) {
+      mapViewRef.current = { center: data.mapCenter, zoom: data.mapZoom };
+      setMapInitView({ center: data.mapCenter, zoom: data.mapZoom });
+    } else {
+      fitMapToLocationData(data);
+    }
   }, [fitMapToLocationData]);
 
   async function loadMissingCartPaths(courseId: string) {
@@ -716,6 +721,8 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
       holes: courseHoles,
       landmarks: courseLandmarks.map((l) => ({ ...l, id: l.id ?? makeId() })),
       cartPaths: courseCartPaths,
+      mapCenter: mapViewRef.current.center,
+      mapZoom: mapViewRef.current.zoom,
       groups: groups.map((g) => ({
         localId: g.localId,
         label: g.label,
@@ -794,6 +801,7 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
         holes: locationData.holes,
         landmarks: locationData.landmarks,
         groups: locationData.groups,
+        labels: [],
         pacingRows: [],
         events: [],
         sessionJson: "",
@@ -834,6 +842,7 @@ export default function TestCaseBuilder({ courseOptions }: { courseOptions: Cour
             holes: locationData.holes,
             landmarks: locationData.landmarks,
             groups: locationData.groups,
+            labels: [],
             pacingRows: [],
             events: [],
             sessionJson: "",

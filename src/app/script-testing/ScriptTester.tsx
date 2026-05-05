@@ -1,8 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { listTestCases } from "@/app/actions";
-import { TestCase, testCaseToExportJson } from "@/lib/testCases";
+import {
+  TEST_CASE_LABEL_OPTIONS,
+  TestCase,
+  TestCaseLabel,
+  testCaseToExportJson,
+} from "@/lib/testCases";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -25,6 +30,14 @@ type StoredPacingRow = {
   landmark: string;
   startTime: string;
   endTime: string;
+};
+
+type StoredSessionEvent = {
+  id: string;
+  groupId: string;
+  eventType: string;
+  landmark: string;
+  time: string;
 };
 
 type EventMatchRow = {
@@ -72,7 +85,7 @@ type SessionRunResult = {
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
-const MATCH_THRESHOLD_MIN = 2.5;
+const MATCH_THRESHOLD_MIN = 3;
 
 const LS_KEYS = {
   pacingName: "omnigolf-script-pacing-name",
@@ -107,6 +120,10 @@ function groupLabelToFilename(label: string): string {
     .toLowerCase()
     .replace(/\s+/g, "_");
   return `${slug}.csv`;
+}
+
+function isCaughtEventsFile(file: CsvResult) {
+  return file.name.toLowerCase().includes("caught_events") && file.name.toLowerCase().endsWith(".json");
 }
 
 function computePacingMetrics(
@@ -216,7 +233,13 @@ function normalizeEventType(s: string): string {
   const n = s.toLowerCase().replace(/[\s_-]/g, "");
   if (n === "leftcourse") return "leavecourse";
   if (n === "behindpace") return "behindpace";
+  if (n === "skiphole") return "skiphole";
+  if (n === "passgroup") return "passgroup";
   return n;
+}
+
+function caughtEventType(caught: any) {
+  return normalizeEventType(String(caught.event_type ?? caught.event ?? caught.type ?? ""));
 }
 
 function computeEventMetrics(
@@ -267,6 +290,7 @@ function computeEventMetrics(
 
         const isAssignment = evType === "groupsplit" || evType === "groupjoin";
         const isPacing = evType === "behindpace" || evType === "leavecourse";
+        const isEitherScriptEvent = evType === "skiphole" || evType === "passgroup";
 
         let caught = false;
         let detail: string | null = null;
@@ -275,7 +299,7 @@ function computeEventMetrics(
           const landmarkHole = ev.landmark?.startsWith?.("hole:")
             ? parseInt(ev.landmark.split(":")[1], 10) : null;
           const hit = assignmentCaught.find((c: any) => {
-            if (normalizeEventType(c.event ?? "") !== evType) return false;
+            if (caughtEventType(c) !== evType) return false;
             // Prefer hole_number match (unambiguous), then fall back to group label
             if (landmarkHole != null && c.hole_number != null) return Number(c.hole_number) === landmarkHole;
             const cGroup = (c.group ?? "").trim().toLowerCase();
@@ -292,7 +316,7 @@ function computeEventMetrics(
           }
         } else if (isPacing) {
           const hit = pacingCaught.find((c: any) => {
-            if (normalizeEventType(c.event_type ?? "") !== evType) return false;
+            if (caughtEventType(c) !== evType) return false;
             if (groupId && c.group_id) return c.group_id === groupId;
             const cLabel = (c.group_label ?? "").trim().toLowerCase();
             const evLabel = (groupLabel ?? "").trim().toLowerCase();
@@ -301,6 +325,30 @@ function computeEventMetrics(
           if (hit) {
             caught = true;
             if (hit.hole != null) detail = `Hole ${hit.hole}`;
+          }
+        } else if (isEitherScriptEvent) {
+          const landmarkHole = ev.landmark?.startsWith?.("hole:")
+            ? parseInt(ev.landmark.split(":")[1], 10) : null;
+          const hit = [...assignmentCaught, ...pacingCaught].find((c: any) => {
+            if (caughtEventType(c) !== evType) return false;
+
+            const caughtHole = c.hole_number ?? c.hole ?? c.predicted_hole;
+            if (landmarkHole != null && caughtHole != null && Number(caughtHole) !== landmarkHole) {
+              return false;
+            }
+
+            if (groupId && c.group_id && c.group_id === groupId) return true;
+
+            const cLabel = String(c.group_label ?? c.group ?? c.passed_group ?? "").trim().toLowerCase();
+            const evLabel = (groupLabel ?? "").trim().toLowerCase();
+            if (evLabel && cLabel) return evLabel === cLabel;
+
+            return landmarkHole != null && caughtHole != null && Number(caughtHole) === landmarkHole;
+          });
+          if (hit) {
+            caught = true;
+            const caughtHole = hit.hole_number ?? hit.hole ?? hit.predicted_hole;
+            if (caughtHole != null) detail = `Hole ${caughtHole}`;
           }
         }
 
@@ -495,6 +543,27 @@ function EventMetrics({ matches }: { matches: EventMatchRow[] }) {
   );
 }
 
+function pacingAccuracyPassed(result: SessionRunResult) {
+  if (!result.pacing) return true;
+  if (result.pacing.error) return false;
+
+  const checks = result.pacingMatches.flatMap((match) => [
+    match.startMatch,
+    match.endMatch,
+  ]).filter((match): match is boolean => match !== null);
+
+  return checks.length > 0 && checks.every(Boolean);
+}
+
+function eventCoveragePassed(result: SessionRunResult) {
+  if (result.pacing?.error || result.assignment?.error) return false;
+  return result.eventMatches.every((match) => match.caught);
+}
+
+function resultPassed(result: SessionRunResult) {
+  return pacingAccuracyPassed(result) && eventCoveragePassed(result);
+}
+
 function PacingScriptResultPanel({
   result,
   pacingMatches,
@@ -508,7 +577,7 @@ function PacingScriptResultPanel({
   if (!result) return null;
 
   const csvFiles = result.csvFiles ?? [];
-  const jsonFiles = result.jsonFiles ?? [];
+  const jsonFiles = (result.jsonFiles ?? []).filter((file) => !isCaughtEventsFile(file));
   const allFiles: CsvResult[] = [...csvFiles, ...jsonFiles];
 
   if (result.error) {
@@ -661,10 +730,12 @@ function AssignmentScriptResultPanel({
   result,
   eventMatches,
   assignmentAnnotations,
+  extraJsonFiles = [],
 }: {
   result: ScriptResult;
   eventMatches: EventMatchRow[];
   assignmentAnnotations: CsvAnnotations;
+  extraJsonFiles?: CsvResult[];
 }) {
   const [activeTab, setActiveTab] = useState(0);
   if (!result) return null;
@@ -673,7 +744,17 @@ function AssignmentScriptResultPanel({
     (f) => f.name === "input_teeoff_gatherings.csv"
   );
   const jsonFiles = result.jsonFiles ?? [];
-  const allFiles: CsvResult[] = [...csvFiles, ...jsonFiles];
+  const existingNames = new Set([...csvFiles, ...jsonFiles].map((file) => file.name));
+  const renamedExtraJsonFiles = extraJsonFiles.map((file) => {
+    if (!existingNames.has(file.name)) {
+      existingNames.add(file.name);
+      return file;
+    }
+    const renamed = { ...file, name: `group_pacing/${file.name}` };
+    existingNames.add(renamed.name);
+    return renamed;
+  });
+  const allFiles: CsvResult[] = [...csvFiles, ...jsonFiles, ...renamedExtraJsonFiles];
 
   if (result.error) {
     return (
@@ -930,6 +1011,10 @@ export default function ScriptTester({
 
   const [testCases, setTestCases] = useState<TestCase[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [completedSessionsOpen, setCompletedSessionsOpen] = useState(true);
+  const [testCasesOpen, setTestCasesOpen] = useState(true);
+  const [testCaseCourseFilter, setTestCaseCourseFilter] = useState("");
+  const [testCaseLabelFilters, setTestCaseLabelFilters] = useState<TestCaseLabel[]>([]);
 
   const [isRunning, setIsRunning] = useState(false);
   const [runProgress, setRunProgress] = useState<{ done: number; total: number } | null>(null);
@@ -1004,6 +1089,50 @@ export default function ScriptTester({
     });
   }
 
+  function toggleTestCaseLabelFilter(label: TestCaseLabel) {
+    setTestCaseLabelFilters((prev) =>
+      prev.includes(label) ? prev.filter((item) => item !== label) : [...prev, label]
+    );
+  }
+
+  const testCaseCourseOptions = useMemo(() => {
+    const byId = new Map<string, string>();
+    for (const tc of testCases) {
+      if (!tc.courseId) continue;
+      byId.set(tc.courseId, tc.courseName || "Unnamed Course");
+    }
+    return [...byId.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  }, [testCases]);
+
+  const filteredTestCases = useMemo(
+    () =>
+      testCases.filter((tc) => {
+        if (testCaseCourseFilter && tc.courseId !== testCaseCourseFilter) return false;
+        return testCaseLabelFilters.every((label) => tc.labels?.includes(label));
+      }),
+    [testCaseCourseFilter, testCaseLabelFilters, testCases]
+  );
+
+  const visibleTestCaseIds = useMemo(
+    () => filteredTestCases.map((tc) => tc.id),
+    [filteredTestCases]
+  );
+
+  const allVisibleTestCasesSelected =
+    visibleTestCaseIds.length > 0 && visibleTestCaseIds.every((id) => selectedIds.has(id));
+
+  function toggleSelectVisibleTestCases() {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allVisibleTestCasesSelected) {
+        visibleTestCaseIds.forEach((id) => next.delete(id));
+      } else {
+        visibleTestCaseIds.forEach((id) => next.add(id));
+      }
+      return next;
+    });
+  }
+
   // ── Run ───────────────────────────────────────────────────────────────────
 
   async function runScriptForJson(
@@ -1053,7 +1182,6 @@ export default function ScriptTester({
         try {
           const res = await fetch(`/api/sessions/${id}/export`);
           const data = await res.json();
-          const jsonStr = JSON.stringify(data, null, 2);
           // Get pacing rows from localStorage
           let pacingRows: StoredPacingRow[] = [];
           try {
@@ -1063,6 +1191,30 @@ export default function ScriptTester({
           } catch {
             /* ignore */
           }
+          try {
+            const events = JSON.parse(
+              localStorage.getItem(`omnigolf-session-events-v1-${id}`) ?? "[]"
+            ) as StoredSessionEvent[];
+            const groupLabelMap = new Map<string, string>(
+              (data.groups ?? []).map((g: any) => [
+                String(g.group_id ?? g.id ?? ""),
+                String(g.label ?? ""),
+              ])
+            );
+            data.events = events
+              .filter((event) => event.eventType)
+              .map((event) => ({
+                group_id: event.groupId || null,
+                group_label: event.groupId ? (groupLabelMap.get(event.groupId) ?? null) : null,
+                event_type: event.eventType,
+                landmark: event.landmark || null,
+                landmark_label: event.landmark || null,
+                time: event.time || null,
+              }));
+          } catch {
+            data.events = data.events ?? [];
+          }
+          const jsonStr = JSON.stringify(data, null, 2);
           queue.push({
             id,
             name: session.name,
@@ -1164,6 +1316,23 @@ export default function ScriptTester({
     selectedIds.size > 0 && (!!pacing.b64 || !!assignment.b64) && !isRunning;
 
   const activeResult = sessionResults[activeSessionIdx];
+  const activeResultTypeAvailable =
+    activeResultType === "pacing" ? !!activeResult?.pacing : !!activeResult?.assignment;
+  const visibleResultType = activeResultTypeAvailable
+    ? activeResultType
+    : activeResult?.pacing
+    ? "pacing"
+    : "assignment";
+
+  function handleResultSessionClick(index: number) {
+    const next = sessionResults[index];
+    setActiveSessionIdx(index);
+    if (activeResultType === "pacing" && !next.pacing) {
+      setActiveResultType("assignment");
+    } else if (activeResultType === "assignment" && !next.assignment) {
+      setActiveResultType("pacing");
+    }
+  }
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -1229,67 +1398,136 @@ export default function ScriptTester({
             {/* Completed sessions */}
             {completedSessions.length > 0 && (
               <div>
-                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                  Completed Sessions
-                </p>
-                <div className="space-y-1">
-                  {completedSessions.map((s) => (
-                    <label
-                      key={s.id}
-                      className="flex cursor-pointer items-center gap-3 rounded-lg border border-zinc-200 px-3 py-2 hover:bg-zinc-50"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.has(s.id)}
-                        onChange={() => toggleId(s.id)}
-                        className="h-4 w-4 rounded border-zinc-300 accent-zinc-900"
-                      />
-                      <div className="min-w-0">
-                        <div className="truncate text-sm text-zinc-900">{s.name}</div>
-                        {(s.courseName || s.sessionDate) && (
-                          <div className="truncate text-xs text-zinc-500">
-                            {[s.courseName, s.sessionDate].filter(Boolean).join(" · ")}
-                          </div>
-                        )}
-                      </div>
-                    </label>
-                  ))}
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setCompletedSessionsOpen((open) => !open)}
+                  className="mb-2 flex w-full items-center justify-between rounded-lg px-1 py-1 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500 hover:bg-zinc-50"
+                >
+                  <span>Completed Sessions</span>
+                  <span>{completedSessionsOpen ? "▲" : "▼"}</span>
+                </button>
+                {completedSessionsOpen && (
+                  <div className="space-y-1">
+                    {completedSessions.map((s) => (
+                      <label
+                        key={s.id}
+                        className="flex cursor-pointer items-center gap-3 rounded-lg border border-zinc-200 px-3 py-2 hover:bg-zinc-50"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(s.id)}
+                          onChange={() => toggleId(s.id)}
+                          className="h-4 w-4 rounded border-zinc-300 accent-zinc-900"
+                        />
+                        <div className="min-w-0">
+                          <div className="truncate text-sm text-zinc-900">{s.name}</div>
+                          {(s.courseName || s.sessionDate) && (
+                            <div className="truncate text-xs text-zinc-500">
+                              {[s.courseName, s.sessionDate].filter(Boolean).join(" · ")}
+                            </div>
+                          )}
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
             {/* Test cases */}
             <div>
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                Test Cases
-              </p>
-              {testCases.length === 0 ? (
-                <p className="text-xs text-zinc-400">
-                  No test cases yet. Create one in the Test Cases tab.
-                </p>
-              ) : (
-                <div className="space-y-1">
-                  {testCases.map((tc) => (
-                    <label
-                      key={tc.id}
-                      className="flex cursor-pointer items-center gap-3 rounded-lg border border-zinc-200 px-3 py-2 hover:bg-zinc-50"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.has(tc.id)}
-                        onChange={() => toggleId(tc.id)}
-                        className="h-4 w-4 rounded border-zinc-300 accent-zinc-900"
-                      />
-                      <div className="min-w-0">
-                        <div className="truncate text-sm text-zinc-900">
-                          {tc.name || "Untitled"}
+              <button
+                type="button"
+                onClick={() => setTestCasesOpen((open) => !open)}
+                className="mb-2 flex w-full items-center justify-between rounded-lg px-1 py-1 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500 hover:bg-zinc-50"
+              >
+                <span>Test Cases</span>
+                <span>{testCasesOpen ? "▲" : "▼"}</span>
+              </button>
+              {testCasesOpen && (
+                <div className="space-y-3">
+                  {testCases.length > 0 && (
+                    <div className="space-y-3 rounded-lg border border-zinc-100 bg-zinc-50 p-3">
+                      <div className="flex flex-wrap items-end gap-2">
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-zinc-600">Course</label>
+                          <select
+                            value={testCaseCourseFilter}
+                            onChange={(e) => setTestCaseCourseFilter(e.target.value)}
+                            className="rounded-lg border border-zinc-200 bg-white px-2 py-1.5 text-xs text-zinc-800 outline-none focus:border-zinc-400"
+                          >
+                            <option value="">All courses</option>
+                            {testCaseCourseOptions.map(([id, name]) => (
+                              <option key={id} value={id}>{name}</option>
+                            ))}
+                          </select>
                         </div>
-                        {tc.courseName && (
-                          <div className="truncate text-xs text-zinc-500">{tc.courseName}</div>
-                        )}
+                        <button
+                          type="button"
+                          onClick={toggleSelectVisibleTestCases}
+                          disabled={visibleTestCaseIds.length === 0}
+                          className="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-sm hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          {allVisibleTestCasesSelected ? "Clear visible" : "Select all"}
+                        </button>
                       </div>
-                    </label>
-                  ))}
+                      <div>
+                        <label className="mb-1 block text-xs font-medium text-zinc-600">Labels</label>
+                        <div className="flex flex-wrap gap-1.5">
+                          {TEST_CASE_LABEL_OPTIONS.map((label) => {
+                            const selected = testCaseLabelFilters.includes(label);
+                            return (
+                              <button
+                                key={label}
+                                type="button"
+                                onClick={() => toggleTestCaseLabelFilter(label)}
+                                className={`rounded-lg border px-2 py-1 text-xs font-medium transition-colors ${
+                                  selected
+                                    ? "border-zinc-900 bg-zinc-900 text-white"
+                                    : "border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50"
+                                }`}
+                              >
+                                {label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  {testCases.length === 0 ? (
+                    <p className="text-xs text-zinc-400">
+                      No test cases yet. Create one in the Test Cases tab.
+                    </p>
+                  ) : filteredTestCases.length === 0 ? (
+                    <p className="text-xs text-zinc-400">
+                      No test cases match the current filters.
+                    </p>
+                  ) : (
+                    <div className="space-y-1">
+                      {filteredTestCases.map((tc) => (
+                        <label
+                          key={tc.id}
+                          className="flex cursor-pointer items-center gap-3 rounded-lg border border-zinc-200 px-3 py-2 hover:bg-zinc-50"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.has(tc.id)}
+                            onChange={() => toggleId(tc.id)}
+                            className="h-4 w-4 rounded border-zinc-300 accent-zinc-900"
+                          />
+                          <div className="min-w-0">
+                            <div className="truncate text-sm text-zinc-900">
+                              {tc.name || "Untitled"}
+                            </div>
+                            {tc.courseName && (
+                              <div className="truncate text-xs text-zinc-500">{tc.courseName}</div>
+                            )}
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1336,37 +1574,42 @@ export default function ScriptTester({
         >
           <div className="flex h-[90vh] w-full max-w-6xl flex-col rounded-2xl border border-zinc-200 bg-zinc-50 shadow-xl">
             {/* Modal header */}
-            <div className="flex shrink-0 items-center justify-between border-b border-zinc-200 px-6 py-4">
-              <div className="flex flex-wrap items-center gap-3">
-                <h2 className="text-sm font-semibold text-zinc-900">Results</h2>
+            <div className="flex shrink-0 items-start justify-between gap-4 border-b border-zinc-200 px-6 py-4">
+              <div className="flex min-w-0 flex-1 flex-col gap-3">
+                <div className="flex min-w-0 items-center gap-3">
+                  <h2 className="shrink-0 text-sm font-semibold text-zinc-900">Results</h2>
 
-                {/* Session tabs (if multiple) */}
-                {sessionResults.length > 1 && (
-                  <div className="flex flex-wrap gap-1">
-                    {sessionResults.map((r, i) => (
-                      <button
-                        key={r.sessionId}
-                        type="button"
-                        onClick={() => {
-                          setActiveSessionIdx(i);
-                          setActiveResultType(
-                            sessionResults[i].pacing ? "pacing" : "assignment"
+                  {/* Session tabs (if multiple) */}
+                  {sessionResults.length > 1 && (
+                    <div className="max-w-full flex-1 overflow-x-auto pb-3">
+                      <div className="flex w-max gap-1">
+                        {sessionResults.map((r, i) => {
+                          const passed = resultPassed(r);
+                          return (
+                            <button
+                              key={r.sessionId}
+                              type="button"
+                              onClick={() => handleResultSessionClick(i)}
+                              className={`flex max-w-56 shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                                activeSessionIdx === i
+                                  ? "bg-zinc-900 text-white shadow-sm"
+                                  : "border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50"
+                              }`}
+                            >
+                              <span className={passed ? "text-green-500" : "text-red-500"}>
+                                {passed ? "✓" : "✕"}
+                              </span>
+                              <span className="truncate">{r.sessionName}</span>
+                              {r.isTestCase && (
+                                <span className="shrink-0 opacity-60">(test)</span>
+                              )}
+                            </button>
                           );
-                        }}
-                        className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-                          activeSessionIdx === i
-                            ? "bg-zinc-900 text-white shadow-sm"
-                            : "border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50"
-                        }`}
-                      >
-                        {r.sessionName}
-                        {r.isTestCase && (
-                          <span className="ml-1 opacity-60">(test)</span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                )}
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
 
                 {/* Pacing / Assignment toggle */}
                 {activeResult?.pacing && activeResult?.assignment && (
@@ -1377,7 +1620,7 @@ export default function ScriptTester({
                         type="button"
                         onClick={() => setActiveResultType(key)}
                         className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-                          activeResultType === key
+                          visibleResultType === key
                             ? "bg-zinc-900 text-white shadow-sm"
                             : "border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50"
                         }`}
@@ -1400,18 +1643,19 @@ export default function ScriptTester({
 
             {/* Modal body */}
             <div className="min-h-0 flex-1 overflow-y-auto p-6">
-              {activeResult && activeResultType === "pacing" && activeResult.pacing && (
+              {activeResult && visibleResultType === "pacing" && activeResult.pacing && (
                 <PacingScriptResultPanel
                   result={activeResult.pacing}
                   pacingMatches={activeResult.pacingMatches}
                   csvAnnotations={activeResult.csvAnnotations}
                 />
               )}
-              {activeResult && activeResultType === "assignment" && (
+              {activeResult && visibleResultType === "assignment" && (
                 <AssignmentScriptResultPanel
                   result={activeResult.assignment}
                   eventMatches={activeResult.eventMatches}
                   assignmentAnnotations={activeResult.assignmentAnnotations}
+                  extraJsonFiles={(activeResult.pacing?.jsonFiles ?? []).filter(isCaughtEventsFile)}
                 />
               )}
             </div>

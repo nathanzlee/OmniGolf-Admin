@@ -42,7 +42,13 @@ type PacingRow = {
   endTime: string;
 };
 
-type SessionEventType = "behind pace" | "group split" | "group join" | "leave course";
+type SessionEventType =
+  | "behind pace"
+  | "group split"
+  | "group join"
+  | "leave course"
+  | "skip_hole"
+  | "pass_group";
 
 type SessionEventRow = {
   id: string;
@@ -59,6 +65,8 @@ const SESSION_EVENT_TYPES: SessionEventType[] = [
   "group split",
   "group join",
   "leave course",
+  "skip_hole",
+  "pass_group",
 ];
 
 const LANDMARK_LABELS: Record<string, string> = {

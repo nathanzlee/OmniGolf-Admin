@@ -800,6 +800,7 @@ type TestCaseRow = {
   description: string | null;
   course_id: string | null;
   groups: TestCase["groups"] | null;
+  labels: TestCase["labels"] | null;
   pacing_rows: TestCase["pacingRows"] | null;
   events: TestCase["events"] | null;
   location_data: TestCase["locationData"] | null;
@@ -819,6 +820,7 @@ function rowToTestCase(row: TestCaseRow): TestCase {
     holes: locationData?.holes ?? [],
     landmarks: locationData?.landmarks ?? [],
     groups: row.groups ?? locationData?.groups ?? [],
+    labels: row.labels ?? [],
     pacingRows: row.pacing_rows ?? [],
     events: row.events ?? [],
     sessionJson: "",
@@ -842,6 +844,7 @@ function testCaseToRow(tc: TestCase) {
     description: tc.description ?? "",
     course_id: courseId,
     groups: tc.groups ?? tc.locationData?.groups ?? [],
+    labels: tc.labels ?? [],
     pacing_rows: tc.pacingRows ?? [],
     events: tc.events ?? [],
     location_data: tc.locationData ?? null,
@@ -854,8 +857,8 @@ export async function listTestCases(): Promise<TestCase[]> {
   const supabase = supabaseServer();
   const { data, error } = await supabase
     .from("test_cases")
-    .select("id, name, description, course_id, groups, pacing_rows, events, location_data, created_at, updated_at")
-    .order("updated_at", { ascending: false });
+    .select("id, name, description, course_id, groups, labels, pacing_rows, events, location_data, created_at, updated_at")
+    .order("created_at", { ascending: false });
 
   if (error) throw new Error(`listTestCases failed: ${error.message}`);
 
@@ -868,7 +871,7 @@ export async function listTestCases(): Promise<TestCase[]> {
     }
   }
 
-  return [...latestById.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return [...latestById.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
 export async function getTestCase(testCaseId: string): Promise<TestCase | null> {
@@ -877,7 +880,7 @@ export async function getTestCase(testCaseId: string): Promise<TestCase | null> 
   const supabase = supabaseServer();
   const { data, error } = await supabase
     .from("test_cases")
-    .select("id, name, description, course_id, groups, pacing_rows, events, location_data, created_at, updated_at")
+    .select("id, name, description, course_id, groups, labels, pacing_rows, events, location_data, created_at, updated_at")
     .eq("id", testCaseId)
     .order("updated_at", { ascending: false })
     .limit(1)
